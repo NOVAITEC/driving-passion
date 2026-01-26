@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Import Margin Calculator - Driving Passion</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --success: #16a34a;
+      --warning: #ca8a04;
+      --danger: #dc2626;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --border: #e2e8f0;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    h1 {
+      font-size: 2rem;
+      color: var(--primary);
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+    }
+
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      padding: 1.5rem;
+    }
+
+    .card h2 {
+      font-size: 1.25rem;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid var(--border);
+    }
+
+    .form-group {
+      margin-bottom: 1rem;
+    }
+
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 0.25rem;
+      font-size: 0.875rem;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+
+    .input-hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 0.75rem;
+      border: none;
+      background: var(--bg);
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .tab.active {
+      background: var(--primary);
+      color: white;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 1rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-dark);
+    }
+
+    .btn-primary:disabled {
+      background: var(--text-muted);
+      cursor: not-allowed;
+    }
+
+    /* Nieuwe styles voor email sectie divider */
+    .email-section {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 2px solid var(--border);
+    }
+
+    .result-card {
+      display: none;
+    }
+
+    .result-card.show {
+      display: block;
+    }
+
+    .result-header {
+      text-align: center;
+      padding: 1.5rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+    }
+
+    .result-header.go {
+      background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+    }
+
+    .result-header.consider {
+      background: linear-gradient(135deg, #fef9c3 0%, #fef08a 100%);
+    }
+
+    .result-header.no-go {
+      background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+    }
+
+    .recommendation {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .recommendation.go { color: var(--success); }
+    .recommendation.consider { color: var(--warning); }
+    .recommendation.no-go { color: var(--danger); }
+
+    .margin-value {
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    .breakdown-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .breakdown-table tr {
+      border-bottom: 1px solid var(--border);
+    }
+
+    .breakdown-table td {
+      padding: 0.75rem 0;
+    }
+
+    .breakdown-table td:last-child {
+      text-align: right;
+      font-weight: 500;
+    }
+
+    .breakdown-table tr.total {
+      border-top: 2px solid var(--text);
+      font-weight: 700;
+    }
+
+    .breakdown-table tr.total td {
+      padding-top: 1rem;
+    }
+
+    .section-title {
+      font-weight: 600;
+      margin: 1.5rem 0 0.75rem;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 3rem;
+    }
+
+    .loading.show {
+      display: block;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 1rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error {
+      background: #fee2e2;
+      color: var(--danger);
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      display: none;
+    }
+
+    .error.show {
+      display: block;
+    }
+
+    .comparables-list {
+      margin-top: 1rem;
+    }
+
+    .comparable-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.75rem;
+      background: var(--bg);
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+    }
+
+    .comparable-item a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    .comparable-item a:hover {
+      text-decoration: underline;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 3rem;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Import Margin Calculator</h1>
+      <p class="subtitle">Driving Passion - Cross-Border Vehicle Arbitrage Tool</p>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Vehicle Details</h2>
+
+        <div class="tabs">
+          <button class="tab active" onclick="switchTab('url')">URL Input</button>
+          <button class="tab" onclick="switchTab('manual')">Manual Input</button>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <form id="calculator-form">
+          <div id="url-tab" class="tab-content active">
+            <div class="form-group">
+              <label for="listing-url">German Listing URL</label>
+              <input
+                type="url"
+                id="listing-url"
+                placeholder="https://www.mobile.de/..."
+              />
+              <p class="input-hint">Paste a URL from Mobile.de or AutoScout24</p>
+            </div>
+          </div>
+
+          <div id="manual-tab" class="tab-content">
+            <div class="form-group">
+              <label for="make">Make</label>
+              <input type="text" id="make" placeholder="e.g., BMW" />
+            </div>
+
+            <div class="form-group">
+              <label for="model">Model</label>
+              <input type="text" id="model" placeholder="e.g., 320d" />
+            </div>
+
+            <div class="form-group">
+              <label for="year">Year</label>
+              <input type="number" id="year" placeholder="e.g., 2021" min="1990" max="2026" />
+            </div>
+
+            <div class="form-group">
+              <label for="mileage">Mileage (km)</label>
+              <input type="number" id="mileage" placeholder="e.g., 45000" min="0" />
+            </div>
+
+            <div class="form-group">
+              <label for="price">German Price (EUR)</label>
+              <input type="number" id="price" placeholder="e.g., 28500" min="0" step="100" />
+            </div>
+
+            <div class="form-group">
+              <label for="fuel-type">Fuel Type</label>
+              <select id="fuel-type">
+                <option value="petrol">Petrol</option>
+                <option value="diesel">Diesel</option>
+                <option value="electric">Electric</option>
+                <option value="hybrid">Hybrid</option>
+                <option value="lpg">LPG</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="transmission">Transmission</label>
+              <select id="transmission">
+                <option value="automatic">Automatic</option>
+                <option value="manual">Manual</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="co2">CO2 Emissions (g/km)</label>
+              <input type="number" id="co2" placeholder="e.g., 118" min="0" max="500" />
+              <p class="input-hint">WLTP value - check vehicle documents</p>
+            </div>
+
+            <div class="form-group">
+              <label for="first-reg">First Registration Date</label>
+              <input type="month" id="first-reg" />
+            </div>
+          </div>
+
+          <div class="email-section">
+             <div class="form-group">
+              <label for="recipient-email">Send Report To (Email)</label>
+              <input 
+                type="email" 
+                id="recipient-email" 
+                placeholder="name@example.com" 
+                required 
+              />
+              <p class="input-hint">The results will be emailed to this address.</p>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary" id="submit-btn">
+            Calculate Margin
+          </button>
+        </form>
+      </div>
+
+      <div>
+        <div class="loading" id="loading">
+          <div class="spinner"></div>
+          <p>Analyzing listing and searching Dutch market...</p>
+          <p style="font-size: 0.8rem; color: #64748b;">De resultaten worden gemaild naar het opgegeven adres.</p>
+        </div>
+
+        <div class="card result-card" id="results">
+          <h2>Analysis Result</h2>
+          
+          <div class="result-header" id="result-header">
+            <div class="recommendation" id="recommendation">-</div>
+            <div class="margin-value" id="margin-value">-</div>
+          </div>
+
+          <div class="section-title">Status</div>
+          <div style="text-align: center; padding: 1rem; background: #f0fdf4; border-radius: 8px; color: #166534; font-weight: 600;">
+            ✓ Rapport verstuurd per e-mail
+          </div>
+
+          <div class="section-title">Vehicle</div>
+          <table class="breakdown-table">
+            <tr>
+              <td>Description</td>
+              <td id="vehicle-desc">-</td>
+            </tr>
+            <tr>
+              <td>Age</td>
+              <td id="vehicle-age">-</td>
+            </tr>
+            <tr>
+              <td>CO2 Emissions</td>
+              <td id="vehicle-co2">-</td>
+            </tr>
+          </table>
+
+          <div class="section-title">Pricing</div>
+          <table class="breakdown-table">
+            <tr>
+              <td>German Price</td>
+              <td id="german-price">-</td>
+            </tr>
+            <tr>
+              <td>Dutch Market Value</td>
+              <td id="dutch-value">-</td>
+            </tr>
+            <tr>
+              <td>Comparables Found</td>
+              <td id="comparables-count">-</td>
+            </tr>
+          </table>
+
+          <div class="section-title">Costs</div>
+          <table class="breakdown-table">
+            <tr>
+              <td>German Price</td>
+              <td id="cost-german">-</td>
+            </tr>
+            <tr>
+              <td>BPM (Rest-BPM)</td>
+              <td id="cost-bpm">-</td>
+            </tr>
+            <tr>
+              <td>Transport</td>
+              <td id="cost-transport">-</td>
+            </tr>
+            <tr>
+              <td>RDW Inspection</td>
+              <td id="cost-rdw">-</td>
+            </tr>
+            <tr>
+              <td>License Plates</td>
+              <td id="cost-plates">-</td>
+            </tr>
+            <tr>
+              <td>Handling Fee</td>
+              <td id="cost-handling">-</td>
+            </tr>
+            <tr>
+              <td>NAP Check</td>
+              <td id="cost-nap">-</td>
+            </tr>
+            <tr class="total">
+              <td>Total Cost</td>
+              <td id="cost-total">-</td>
+            </tr>
+          </table>
+
+          <div class="section-title">BPM Details</div>
+          <table class="breakdown-table">
+            <tr>
+              <td>Gross BPM</td>
+              <td id="bpm-gross">-</td>
+            </tr>
+            <tr>
+              <td>Depreciation</td>
+              <td id="bpm-depreciation">-</td>
+            </tr>
+            <tr>
+              <td>Diesel Surcharge</td>
+              <td id="bpm-diesel">-</td>
+            </tr>
+            <tr class="total">
+              <td>Rest-BPM</td>
+              <td id="bpm-rest">-</td>
+            </tr>
+          </table>
+
+          <div class="section-title">Dutch Comparables</div>
+          <div class="comparables-list" id="comparables-list">
+            <p class="input-hint">No comparables found</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <p>Driving Passion - Import Margin Calculator v1.0</p>
+      <p>BPM rates based on 2026 Belastingdienst forfaitaire tabel</p>
+    </footer>
+  </div>
+
+  <script>
+    // Configuration - Update this with your n8n webhook URL
+    const API_URL = 'https://maerschalk.app.n8n.cloud/webhook/search-german-markets';
+
+    // Tab switching
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      document.querySelector(`.tab:nth-child(${tab === 'url' ? 1 : 2})`).classList.add('active');
+      document.getElementById(`${tab}-tab`).classList.add('active');
+    }
+
+    // Format currency
+    function formatCurrency(value) {
+      if (value === undefined || value === null) return '-';
+      return new Intl.NumberFormat('nl-NL', {
+        style: 'currency',
+        currency: 'EUR',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+      }).format(value);
+    }
+
+    // Show/hide elements
+    function showElement(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.add('show');
+    }
+
+    function hideElement(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('show');
+    }
+
+    // Display results with Safety Checks
+    function displayResults(data) {
+      const results = document.getElementById('results');
+      const header = document.getElementById('result-header');
+
+      // Check if data is valid
+      if (!data || !data.result) {
+         console.error("Invalid data structure:", data);
+         throw new Error("Ongeldig antwoord van de server ontvangen (geen resultaat data).");
+      }
+
+      // Safe access to recommendation
+      const recRaw = data.result.recommendation || 'UNKNOWN';
+      const rec = recRaw.toLowerCase().replace('_', '-');
+      header.className = `result-header ${rec}`;
+
+      const recEl = document.getElementById('recommendation');
+      recEl.className = `recommendation ${rec}`;
+      recEl.textContent = recRaw === 'GO' ? 'GO' :
+                          recRaw === 'CONSIDER' ? 'CONSIDER' : 
+                          recRaw === 'NO_GO' ? 'NO-GO' : recRaw;
+
+      document.getElementById('margin-value').textContent =
+        `Margin: ${formatCurrency(data.result.margin)} (${(data.result.marginPercentage || 0).toFixed(1)}% ROI)`;
+
+      // Vehicle info - Safe Access (?.)
+      document.getElementById('vehicle-desc').textContent = data.vehicle?.description || '-';
+      document.getElementById('vehicle-age').textContent = data.vehicle?.ageMonths ? `${data.vehicle.ageMonths} months` : '-';
+      document.getElementById('vehicle-co2').textContent = data.vehicle?.co2_gkm ? `${data.vehicle.co2_gkm} g/km` : '-';
+
+      // Pricing - Safe Access
+      document.getElementById('german-price').textContent = formatCurrency(data.pricing?.germanPrice);
+      document.getElementById('dutch-value').textContent = formatCurrency(data.pricing?.dutchMarketValue);
+      document.getElementById('comparables-count').textContent = data.pricing?.comparablesCount || 0;
+
+      // Costs - Safe Access
+      document.getElementById('cost-german').textContent = formatCurrency(data.costs?.germanPrice);
+      document.getElementById('cost-bpm').textContent = formatCurrency(data.costs?.bpm);
+      document.getElementById('cost-transport').textContent = formatCurrency(data.costs?.transport);
+      document.getElementById('cost-rdw').textContent = formatCurrency(data.costs?.rdwInspection);
+      document.getElementById('cost-plates').textContent = formatCurrency(data.costs?.licensePlates);
+      document.getElementById('cost-handling').textContent = formatCurrency(data.costs?.handlingFee);
+      document.getElementById('cost-nap').textContent = formatCurrency(data.costs?.napCheck);
+      document.getElementById('cost-total').textContent = formatCurrency(data.costs?.totalCost);
+
+      // BPM - Safe Access
+      document.getElementById('bpm-gross').textContent = formatCurrency(data.bpm?.grossBPM);
+      document.getElementById('bpm-depreciation').textContent = data.bpm?.depreciationPercentage ? `${data.bpm.depreciationPercentage}%` : '-';
+      document.getElementById('bpm-diesel').textContent = formatCurrency(data.bpm?.dieselSurcharge);
+      document.getElementById('bpm-rest').textContent = formatCurrency(data.bpm?.restBPM);
+
+      // Comparables
+      const compList = document.getElementById('comparables-list');
+      if (data.comparables && data.comparables.length > 0) {
+        compList.innerHTML = data.comparables.map(c => `
+          <div class="comparable-item">
+            <span>${c.title || 'Listing'}</span>
+            <span>
+              ${formatCurrency(c.price_eur)}
+              ${c.listingUrl ? `<a href="${c.listingUrl}" target="_blank">View</a>` : ''}
+            </span>
+          </div>
+        `).join('');
+      } else {
+        compList.innerHTML = '<p class="input-hint">No comparables to display</p>';
+      }
+
+      showElement('results');
+    }
+
+    // Form submission
+    document.getElementById('calculator-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      hideElement('error');
+      hideElement('results');
+      showElement('loading');
+
+      const submitBtn = document.getElementById('submit-btn');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Calculating...';
+
+      // SET TIMEOUT TO 10 MINUTES (600,000 ms)
+      const TIMEOUT_DURATION = 600000;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_DURATION);
+
+      try {
+        const urlTab = document.getElementById('url-tab').classList.contains('active');
+        
+        // 1. HAAL HET EMAIL ADRES OP
+        const recipientEmail = document.getElementById('recipient-email').value;
+        if(!recipientEmail) throw new Error("Vul een e-mailadres in.");
+
+        let body;
+
+        if (urlTab) {
+          const url = document.getElementById('listing-url').value;
+          if (!url) throw new Error('Please enter a listing URL');
+          
+          // 2. VOEG EMAIL TOE AAN BODY
+          body = { url, email: recipientEmail };
+        } else {
+          // Manual input
+          const make = document.getElementById('make').value;
+          const model = document.getElementById('model').value;
+          const year = document.getElementById('year').value;
+          const mileage = document.getElementById('mileage').value;
+          const price = document.getElementById('price').value;
+          const fuelType = document.getElementById('fuel-type').value;
+          const transmission = document.getElementById('transmission').value;
+          const co2 = document.getElementById('co2').value;
+          const firstReg = document.getElementById('first-reg').value;
+
+          if (!make || !model || !year || !mileage || !price) {
+            throw new Error('Please fill in all required fields');
+          }
+
+          body = {
+            make,
+            model,
+            year: parseInt(year),
+            mileage_km: parseInt(mileage),
+            price_eur: parseFloat(price),
+            fuelType,
+            transmission,
+            co2_gkm: parseInt(co2) || 120,
+            firstRegistrationDate: firstReg ? `${firstReg}-01` : `${year}-01-01`,
+            // 2. VOEG EMAIL TOE AAN BODY
+            email: recipientEmail
+          };
+        }
+
+        console.log("Sending request to:", API_URL);
+
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json' 
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          let errorMsg = `Server error (${response.status})`;
+          try {
+            const errorData = await response.json();
+            if (errorData.message) errorMsg = errorData.message;
+          } catch(e) {
+            // response was not JSON
+          }
+          throw new Error(errorMsg);
+        }
+
+        const data = await response.json();
+        displayResults(data);
+
+      } catch (error) {
+        console.error("Full error:", error);
+        
+        let displayMsg = error.message;
+
+        if (error.name === 'AbortError') {
+           displayMsg = "De aanvraag duurde langer dan 10 minuten en is gestopt. Controleer je e-mail, mogelijk is het rapport later verstuurd.";
+        } else if (displayMsg.includes("Failed to fetch")) {
+           displayMsg = "Verbinding mislukt. Controleer je e-mail, omdat we overschakelen naar asynchrone verwerking is het mogelijk dat je het rapport wel ontvangt.";
+        }
+
+        document.getElementById('error').textContent = displayMsg;
+        showElement('error');
+      } finally {
+        clearTimeout(timeoutId);
+        hideElement('loading');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Calculate Margin';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,350 @@
+{
+  "name": "German Listing Parser",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "parse-german-listing",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mobile-de",
+              "leftValue": "={{ $json.body.url }}",
+              "rightValue": "mobile.de",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "detect-source",
+      "name": "Detect Source",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/3x1t~mobile-de-scraper/runs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $credentials.apifyApi.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"startUrls\": [\n    {\n      \"url\": \"{{ $json.body.url }}\"\n    }\n  ],\n  \"maxItems\": 1\n}",
+        "options": {}
+      },
+      "id": "apify-mobile-de",
+      "name": "Scrape Mobile.de",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 200],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "apify",
+          "name": "Apify API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/ivanvs~autoscout-scraper/runs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $credentials.apifyApi.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"startUrls\": [\n    {\n      \"url\": \"{{ $json.body.url }}\"\n    }\n  ],\n  \"maxItems\": 1\n}",
+        "options": {}
+      },
+      "id": "apify-autoscout",
+      "name": "Scrape AutoScout24",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 400],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "apify",
+          "name": "Apify API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "pollInterval": 5,
+        "maxRetries": 30,
+        "method": "GET",
+        "url": "=https://api.apify.com/v2/actor-runs/{{ $json.data.id }}/dataset/items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $credentials.apifyApi.token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wait-mobile-de",
+      "name": "Wait for Mobile.de Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 200],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 30
+    },
+    {
+      "parameters": {
+        "pollInterval": 5,
+        "maxRetries": 30,
+        "method": "GET",
+        "url": "=https://api.apify.com/v2/actor-runs/{{ $json.data.id }}/dataset/items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $credentials.apifyApi.token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wait-autoscout",
+      "name": "Wait for AutoScout24 Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 400],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 30
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Mobile.de listing data\nconst item = $input.first().json[0];\n\nif (!item) {\n  throw new Error('No listing data found');\n}\n\n// Map to standardized format\nconst vehicleData = {\n  make: item.brand || item.make || '',\n  model: item.model || '',\n  year: parseInt(item.year) || new Date().getFullYear(),\n  mileage_km: parseInt(String(item.mileage || item.km || '0').replace(/\\D/g, '')),\n  price_eur: parseFloat(String(item.price || '0').replace(/[^0-9.,]/g, '').replace(',', '.')),\n  fuelType: mapFuelType(item.fuel || item.fuelType || 'petrol'),\n  transmission: (item.transmission || '').toLowerCase().includes('automat') ? 'automatic' : 'manual',\n  co2_gkm: parseInt(item.co2 || item.co2Emission || '0') || estimateCO2(item),\n  firstRegistrationDate: parseRegistrationDate(item.firstRegistration || item.year),\n  listingUrl: item.url || $input.first().json.body?.url || '',\n  source: 'mobile.de',\n  rawData: item\n};\n\nfunction mapFuelType(fuel) {\n  const fuelLower = fuel.toLowerCase();\n  if (fuelLower.includes('diesel')) return 'diesel';\n  if (fuelLower.includes('electr') || fuelLower.includes('elektr')) return 'electric';\n  if (fuelLower.includes('hybrid')) return 'hybrid';\n  if (fuelLower.includes('lpg') || fuelLower.includes('gas')) return 'lpg';\n  return 'petrol';\n}\n\nfunction parseRegistrationDate(dateStr) {\n  if (!dateStr) return new Date();\n  \n  // Handle MM/YYYY format\n  if (dateStr.includes('/')) {\n    const [month, year] = dateStr.split('/');\n    return new Date(parseInt(year), parseInt(month) - 1, 1);\n  }\n  \n  // Handle year only\n  if (/^\\d{4}$/.test(dateStr)) {\n    return new Date(parseInt(dateStr), 0, 1);\n  }\n  \n  return new Date(dateStr);\n}\n\nfunction estimateCO2(item) {\n  // Rough CO2 estimation based on engine size if not provided\n  const engineCC = parseInt(item.engineSize || item.displacement || '0');\n  const fuel = (item.fuel || 'petrol').toLowerCase();\n  \n  if (fuel.includes('electr')) return 0;\n  if (engineCC < 1000) return 95;\n  if (engineCC < 1400) return 115;\n  if (engineCC < 1800) return 135;\n  if (engineCC < 2500) return 165;\n  return 200;\n}\n\nreturn { json: vehicleData };"
+      },
+      "id": "parse-mobile-de",
+      "name": "Parse Mobile.de Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AutoScout24 listing data\nconst item = $input.first().json[0];\n\nif (!item) {\n  throw new Error('No listing data found');\n}\n\n// Map to standardized format\nconst vehicleData = {\n  make: item.brand || item.make || '',\n  model: item.model || '',\n  year: parseInt(item.year) || new Date().getFullYear(),\n  mileage_km: parseInt(String(item.mileage || item.km || '0').replace(/\\D/g, '')),\n  price_eur: parseFloat(String(item.price || '0').replace(/[^0-9.,]/g, '').replace(',', '.')),\n  fuelType: mapFuelType(item.fuel || item.fuelType || 'petrol'),\n  transmission: (item.transmission || '').toLowerCase().includes('automat') ? 'automatic' : 'manual',\n  co2_gkm: parseInt(item.co2 || item.co2Emission || '0') || estimateCO2(item),\n  firstRegistrationDate: parseRegistrationDate(item.firstRegistration || item.year),\n  listingUrl: item.url || $input.first().json.body?.url || '',\n  source: 'autoscout24',\n  rawData: item\n};\n\nfunction mapFuelType(fuel) {\n  const fuelLower = fuel.toLowerCase();\n  if (fuelLower.includes('diesel')) return 'diesel';\n  if (fuelLower.includes('electr') || fuelLower.includes('elektr')) return 'electric';\n  if (fuelLower.includes('hybrid')) return 'hybrid';\n  if (fuelLower.includes('lpg') || fuelLower.includes('gas')) return 'lpg';\n  return 'petrol';\n}\n\nfunction parseRegistrationDate(dateStr) {\n  if (!dateStr) return new Date();\n  \n  // Handle MM/YYYY format\n  if (dateStr.includes('/')) {\n    const [month, year] = dateStr.split('/');\n    return new Date(parseInt(year), parseInt(month) - 1, 1);\n  }\n  \n  // Handle year only\n  if (/^\\d{4}$/.test(dateStr)) {\n    return new Date(parseInt(dateStr), 0, 1);\n  }\n  \n  return new Date(dateStr);\n}\n\nfunction estimateCO2(item) {\n  // Rough CO2 estimation based on engine size if not provided\n  const engineCC = parseInt(item.engineSize || item.displacement || '0');\n  const fuel = (item.fuel || 'petrol').toLowerCase();\n  \n  if (fuel.includes('electr')) return 0;\n  if (engineCC < 1000) return 95;\n  if (engineCC < 1400) return 115;\n  if (engineCC < 1800) return 135;\n  if (engineCC < 2500) return 165;\n  return 200;\n}\n\nreturn { json: vehicleData };"
+      },
+      "id": "parse-autoscout",
+      "name": "Parse AutoScout24 Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "merge-results",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-success",
+      "name": "Respond with Data",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"error\": true,\n  \"message\": \"{{ $json.message || 'Failed to parse listing' }}\"\n}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond with Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1250, 500]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Detect Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Source": {
+      "main": [
+        [
+          {
+            "node": "Scrape Mobile.de",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scrape AutoScout24",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Mobile.de": {
+      "main": [
+        [
+          {
+            "node": "Wait for Mobile.de Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape AutoScout24": {
+      "main": [
+        [
+          {
+            "node": "Wait for AutoScout24 Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Mobile.de Result": {
+      "main": [
+        [
+          {
+            "node": "Parse Mobile.de Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for AutoScout24 Result": {
+      "main": [
+        [
+          {
+            "node": "Parse AutoScout24 Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Mobile.de Data": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AutoScout24 Data": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Respond with Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "driving-passion-arbitrage"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "driving-passion",
+      "createdAt": "2026-01-25T00:00:00.000Z",
+      "updatedAt": "2026-01-25T00:00:00.000Z"
+    }
+  ]
+}
