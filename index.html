@@ -523,12 +523,13 @@
       const winstText = data.winst_schatting || '-';
       winstEl.textContent = winstText;
 
-      // Parse de waarde uit de string (bijv. "€ 1.234" of "€ -500")
-      const winstValue = parseFloat(winstText.replace(/[€\s.]/g, '').replace(',', '.')) || 0;
+      // Bepaal kleur op basis van of er een min-teken in de string zit
+      const isNegative = winstText.includes('-');
+      const isZero = winstText === '-' || winstText === '€ 0' || winstText === '€ 0,00' || winstText.match(/€\s*0[,.]?0*$/);
 
-      if (winstValue < 0) {
+      if (isNegative) {
         winstEl.style.color = 'var(--danger)'; // Rood
-      } else if (winstValue === 0) {
+      } else if (isZero) {
         winstEl.style.color = 'var(--text-muted)'; // Grijs
       } else {
         winstEl.style.color = 'var(--success)'; // Groen
