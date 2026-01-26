@@ -432,109 +432,29 @@
         </div>
 
         <div class="card result-card" id="results">
-          <h2>Analysis Result</h2>
-          
-          <div class="result-header" id="result-header">
-            <div class="recommendation" id="recommendation">-</div>
+          <h2>Analyse Resultaat</h2>
+
+          <div class="result-header go" id="result-header">
+            <div style="font-size: 3rem; margin-bottom: 0.5rem;">✓</div>
+            <div class="recommendation" id="recommendation" style="font-size: 1.5rem;">Rapport Verstuurd</div>
             <div class="margin-value" id="margin-value">-</div>
           </div>
 
-          <div class="section-title">Status</div>
-          <div style="text-align: center; padding: 1rem; background: #f0fdf4; border-radius: 8px; color: #166534; font-weight: 600;">
-            ✓ Rapport verstuurd per e-mail
-          </div>
-
-          <div class="section-title">Vehicle</div>
+          <div class="section-title">Samenvatting</div>
           <table class="breakdown-table">
             <tr>
-              <td>Description</td>
+              <td>Voertuig</td>
               <td id="vehicle-desc">-</td>
             </tr>
             <tr>
-              <td>Age</td>
-              <td id="vehicle-age">-</td>
-            </tr>
-            <tr>
-              <td>CO2 Emissions</td>
-              <td id="vehicle-co2">-</td>
+              <td>Geschatte Winst</td>
+              <td id="winst-schatting" style="font-weight: 700; color: var(--success);">-</td>
             </tr>
           </table>
 
-          <div class="section-title">Pricing</div>
-          <table class="breakdown-table">
-            <tr>
-              <td>German Price</td>
-              <td id="german-price">-</td>
-            </tr>
-            <tr>
-              <td>Dutch Market Value</td>
-              <td id="dutch-value">-</td>
-            </tr>
-            <tr>
-              <td>Comparables Found</td>
-              <td id="comparables-count">-</td>
-            </tr>
-          </table>
-
-          <div class="section-title">Costs</div>
-          <table class="breakdown-table">
-            <tr>
-              <td>German Price</td>
-              <td id="cost-german">-</td>
-            </tr>
-            <tr>
-              <td>BPM (Rest-BPM)</td>
-              <td id="cost-bpm">-</td>
-            </tr>
-            <tr>
-              <td>Transport</td>
-              <td id="cost-transport">-</td>
-            </tr>
-            <tr>
-              <td>RDW Inspection</td>
-              <td id="cost-rdw">-</td>
-            </tr>
-            <tr>
-              <td>License Plates</td>
-              <td id="cost-plates">-</td>
-            </tr>
-            <tr>
-              <td>Handling Fee</td>
-              <td id="cost-handling">-</td>
-            </tr>
-            <tr>
-              <td>NAP Check</td>
-              <td id="cost-nap">-</td>
-            </tr>
-            <tr class="total">
-              <td>Total Cost</td>
-              <td id="cost-total">-</td>
-            </tr>
-          </table>
-
-          <div class="section-title">BPM Details</div>
-          <table class="breakdown-table">
-            <tr>
-              <td>Gross BPM</td>
-              <td id="bpm-gross">-</td>
-            </tr>
-            <tr>
-              <td>Depreciation</td>
-              <td id="bpm-depreciation">-</td>
-            </tr>
-            <tr>
-              <td>Diesel Surcharge</td>
-              <td id="bpm-diesel">-</td>
-            </tr>
-            <tr class="total">
-              <td>Rest-BPM</td>
-              <td id="bpm-rest">-</td>
-            </tr>
-          </table>
-
-          <div class="section-title">Dutch Comparables</div>
-          <div class="comparables-list" id="comparables-list">
-            <p class="input-hint">No comparables found</p>
+          <div style="text-align: center; padding: 1.5rem; background: #f0fdf4; border-radius: 8px; color: #166534; margin-top: 1.5rem;">
+            <p style="font-weight: 600; margin-bottom: 0.5rem;" id="status-message">Het volledige rapport is verstuurd naar je e-mail.</p>
+            <p style="font-size: 0.875rem; color: #64748b;">Controleer je inbox (en spam folder) voor het gedetailleerde rapport.</p>
           </div>
         </div>
       </div>
@@ -581,72 +501,24 @@
       if (el) el.classList.remove('show');
     }
 
-    // Display results with Safety Checks
+    // Display results based on n8n Respond to Webhook response
     function displayResults(data) {
-      const results = document.getElementById('results');
-      const header = document.getElementById('result-header');
-
       // Check if data is valid
-      if (!data || !data.result) {
-         console.error("Invalid data structure:", data);
-         throw new Error("Ongeldig antwoord van de server ontvangen (geen resultaat data).");
+      if (!data) {
+         console.error("No data received:", data);
+         throw new Error("Geen antwoord van de server ontvangen.");
       }
 
-      // Safe access to recommendation
-      const recRaw = data.result.recommendation || 'UNKNOWN';
-      const rec = recRaw.toLowerCase().replace('_', '-');
-      header.className = `result-header ${rec}`;
-
-      const recEl = document.getElementById('recommendation');
-      recEl.className = `recommendation ${rec}`;
-      recEl.textContent = recRaw === 'GO' ? 'GO' :
-                          recRaw === 'CONSIDER' ? 'CONSIDER' : 
-                          recRaw === 'NO_GO' ? 'NO-GO' : recRaw;
-
-      document.getElementById('margin-value').textContent =
-        `Margin: ${formatCurrency(data.result.margin)} (${(data.result.marginPercentage || 0).toFixed(1)}% ROI)`;
-
-      // Vehicle info - Safe Access (?.)
-      document.getElementById('vehicle-desc').textContent = data.vehicle?.description || '-';
-      document.getElementById('vehicle-age').textContent = data.vehicle?.ageMonths ? `${data.vehicle.ageMonths} months` : '-';
-      document.getElementById('vehicle-co2').textContent = data.vehicle?.co2_gkm ? `${data.vehicle.co2_gkm} g/km` : '-';
-
-      // Pricing - Safe Access
-      document.getElementById('german-price').textContent = formatCurrency(data.pricing?.germanPrice);
-      document.getElementById('dutch-value').textContent = formatCurrency(data.pricing?.dutchMarketValue);
-      document.getElementById('comparables-count').textContent = data.pricing?.comparablesCount || 0;
-
-      // Costs - Safe Access
-      document.getElementById('cost-german').textContent = formatCurrency(data.costs?.germanPrice);
-      document.getElementById('cost-bpm').textContent = formatCurrency(data.costs?.bpm);
-      document.getElementById('cost-transport').textContent = formatCurrency(data.costs?.transport);
-      document.getElementById('cost-rdw').textContent = formatCurrency(data.costs?.rdwInspection);
-      document.getElementById('cost-plates').textContent = formatCurrency(data.costs?.licensePlates);
-      document.getElementById('cost-handling').textContent = formatCurrency(data.costs?.handlingFee);
-      document.getElementById('cost-nap').textContent = formatCurrency(data.costs?.napCheck);
-      document.getElementById('cost-total').textContent = formatCurrency(data.costs?.totalCost);
-
-      // BPM - Safe Access
-      document.getElementById('bpm-gross').textContent = formatCurrency(data.bpm?.grossBPM);
-      document.getElementById('bpm-depreciation').textContent = data.bpm?.depreciationPercentage ? `${data.bpm.depreciationPercentage}%` : '-';
-      document.getElementById('bpm-diesel').textContent = formatCurrency(data.bpm?.dieselSurcharge);
-      document.getElementById('bpm-rest').textContent = formatCurrency(data.bpm?.restBPM);
-
-      // Comparables
-      const compList = document.getElementById('comparables-list');
-      if (data.comparables && data.comparables.length > 0) {
-        compList.innerHTML = data.comparables.map(c => `
-          <div class="comparable-item">
-            <span>${c.title || 'Listing'}</span>
-            <span>
-              ${formatCurrency(c.price_eur)}
-              ${c.listingUrl ? `<a href="${c.listingUrl}" target="_blank">View</a>` : ''}
-            </span>
-          </div>
-        `).join('');
-      } else {
-        compList.innerHTML = '<p class="input-hint">No comparables to display</p>';
+      // Check for success status from n8n
+      if (data.status !== 'success') {
+         console.error("Unexpected status:", data);
+         throw new Error(data.message || "De berekening kon niet worden voltooid.");
       }
+
+      // Display the success response from n8n
+      document.getElementById('vehicle-desc').textContent = data.vehicle || '-';
+      document.getElementById('winst-schatting').textContent = data.winst_schatting || '-';
+      document.getElementById('status-message').textContent = data.message || 'Het rapport is verstuurd naar je e-mail.';
 
       showElement('results');
     }
@@ -728,18 +600,32 @@
 
         clearTimeout(timeoutId);
 
-        if (!response.ok) {
-          let errorMsg = `Server error (${response.status})`;
-          try {
-            const errorData = await response.json();
-            if (errorData.message) errorMsg = errorData.message;
-          } catch(e) {
-            // response was not JSON
+        const data = await response.json();
+
+        // Check voor error responses van n8n Respond to Webhook
+        if (data.error || data.status === 'error') {
+          // Handle specifieke error types van n8n
+          if (data.errorType === 'LISTING_SOLD' || data.errorType === 'LISTING_OFFLINE') {
+            throw new Error('Deze advertentie is niet meer beschikbaar of is verkocht.');
+          } else if (data.errorType === 'INVALID_URL') {
+            throw new Error('De opgegeven URL is ongeldig of wordt niet ondersteund.');
+          } else if (data.errorType === 'SCRAPER_ERROR') {
+            throw new Error('Kon de advertentie niet ophalen. Probeer het later opnieuw.');
+          } else {
+            throw new Error(data.message || 'Er is een fout opgetreden bij de berekening.');
           }
-          throw new Error(errorMsg);
         }
 
-        const data = await response.json();
+        // Check HTTP status code voor niet-JSON errors
+        if (!response.ok) {
+          throw new Error(`Server error (${response.status})`);
+        }
+
+        // Check voor success status
+        if (data.status !== 'success') {
+          throw new Error(data.message || 'Onverwacht antwoord van de server.');
+        }
+
         displayResults(data);
 
       } catch (error) {
