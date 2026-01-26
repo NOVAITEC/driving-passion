@@ -448,7 +448,7 @@
             </tr>
             <tr>
               <td>Geschatte Winst</td>
-              <td id="winst-schatting" style="font-weight: 700; color: var(--success);">-</td>
+              <td id="winst-schatting" style="font-weight: 700;">-</td>
             </tr>
           </table>
 
@@ -517,7 +517,23 @@
 
       // Display the success response from n8n
       document.getElementById('vehicle-desc').textContent = data.vehicle || '-';
-      document.getElementById('winst-schatting').textContent = data.winst_schatting || '-';
+
+      // Winst schatting met kleur op basis van waarde
+      const winstEl = document.getElementById('winst-schatting');
+      const winstText = data.winst_schatting || '-';
+      winstEl.textContent = winstText;
+
+      // Parse de waarde uit de string (bijv. "€ 1.234" of "€ -500")
+      const winstValue = parseFloat(winstText.replace(/[€\s.]/g, '').replace(',', '.')) || 0;
+
+      if (winstValue < 0) {
+        winstEl.style.color = 'var(--danger)'; // Rood
+      } else if (winstValue === 0) {
+        winstEl.style.color = 'var(--text-muted)'; // Grijs
+      } else {
+        winstEl.style.color = 'var(--success)'; // Groen
+      }
+
       document.getElementById('status-message').textContent = data.message || 'Het rapport is verstuurd naar je e-mail.';
 
       showElement('results');
