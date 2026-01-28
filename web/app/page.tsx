@@ -70,6 +70,7 @@ interface ComparableVehicle {
   year?: number
   listingUrl?: string
   location?: string
+  source?: string
 }
 
 interface AnalysisResult {
