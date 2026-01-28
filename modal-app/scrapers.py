@@ -50,9 +50,10 @@ class ScrapeResult:
 
 def detect_source(url: str) -> str:
     """Detect the source website from URL."""
-    if "mobile.de" in url:
+    url_lower = url.lower()
+    if "mobile.de" in url_lower or "suchen.mobile.de" in url_lower:
         return "mobile.de"
-    if "autoscout24" in url:
+    if "autoscout24.de" in url_lower or "autoscout24.com" in url_lower:
         return "autoscout24"
     return "unknown"
 
@@ -207,46 +208,126 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
 
 def parse_autoscout24_result(item: dict, url: str) -> VehicleData:
     """Parse AutoScout24 scraper result into VehicleData."""
-    # Similar structure to mobile.de
-    attrs = item.get("vehicleDetails", item.get("attributes", {}))
+    # Handle different output formats from various AutoScout24 scrapers
+    attrs = item.get("vehicleDetails", item.get("attributes", item.get("vehicle", {})))
 
-    make = item.get("make", attrs.get("make", "Unknown"))
-    model = item.get("model", attrs.get("model", "Unknown"))
+    # Try multiple field names for make/model (different scrapers use different names)
+    make = (
+        item.get("make") or
+        item.get("brand") or
+        attrs.get("make") or
+        attrs.get("brand") or
+        "Unknown"
+    )
+    model = (
+        item.get("model") or
+        item.get("modelLine") or
+        attrs.get("model") or
+        "Unknown"
+    )
 
-    # Get first registration
-    first_reg_str = attrs.get("firstRegistration", item.get("firstRegistration", ""))
+    # Get first registration - handle multiple formats
+    first_reg_str = (
+        item.get("firstRegistration") or
+        item.get("registration") or
+        attrs.get("firstRegistration") or
+        item.get("year") or
+        ""
+    )
+    first_reg = datetime.now()
+    year = datetime.now().year
+
     if first_reg_str:
         try:
+            first_reg_str = str(first_reg_str)
             if "/" in first_reg_str:
-                month, year = first_reg_str.split("/")
-                first_reg = datetime(int(year), int(month), 1)
-            else:
+                # Format: MM/YYYY
+                month, yr = first_reg_str.split("/")
+                first_reg = datetime(int(yr), int(month), 1)
+                year = int(yr)
+            elif "-" in first_reg_str:
+                # Format: YYYY-MM or YYYY-MM-DD
                 parts = first_reg_str.split("-")
                 if len(parts) >= 2:
                     first_reg = datetime(int(parts[0]), int(parts[1]), 1)
-                else:
-                    first_reg = datetime(int(first_reg_str), 1, 1)
+                    year = int(parts[0])
+            elif first_reg_str.isdigit() and len(first_reg_str) == 4:
+                # Format: YYYY
+                year = int(first_reg_str)
+                first_reg = datetime(year, 1, 1)
         except:
-            first_reg = datetime.now()
-    else:
-        first_reg = datetime.now()
+            pass
 
-    year = first_reg.year
+    # Override year if explicitly provided
+    if item.get("year"):
+        try:
+            year = int(item.get("year"))
+        except:
+            pass
 
-    mileage_str = str(item.get("mileage", attrs.get("mileage", "0")))
+    # Get mileage - try multiple field names
+    mileage_str = str(
+        item.get("mileage") or
+        item.get("km") or
+        item.get("mileageInKm") or
+        attrs.get("mileage") or
+        "0"
+    )
     mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
 
-    price_str = str(item.get("price", attrs.get("price", "0")))
-    price = int("".join(filter(str.isdigit, price_str)) or 0)
+    # Get price - try multiple field names
+    price_val = (
+        item.get("price") or
+        item.get("priceInEur") or
+        item.get("priceNumeric") or
+        attrs.get("price") or
+        "0"
+    )
+    price_str = str(price_val)
+    price = int("".join(filter(str.isdigit, price_str.split(".")[0].split(",")[0])) or 0)
 
-    fuel_type = normalize_fuel_type(item.get("fuelType", attrs.get("fuelType", "petrol")))
-    transmission = normalize_transmission(item.get("transmission", attrs.get("transmission", "automatic")))
+    # Get fuel type
+    fuel_raw = (
+        item.get("fuelType") or
+        item.get("fuel") or
+        attrs.get("fuelType") or
+        attrs.get("fuel") or
+        "petrol"
+    )
+    fuel_type = normalize_fuel_type(fuel_raw)
 
-    co2_str = str(item.get("co2Emission", attrs.get("co2Emission", "")))
-    if co2_str:
-        co2 = int("".join(filter(str.isdigit, co2_str)) or 150)
+    # Get transmission
+    trans_raw = (
+        item.get("transmission") or
+        item.get("gearbox") or
+        attrs.get("transmission") or
+        "automatic"
+    )
+    transmission = normalize_transmission(trans_raw)
+
+    # Get CO2 - try multiple field names
+    co2_val = (
+        item.get("co2Emission") or
+        item.get("co2") or
+        item.get("emissionsCO2") or
+        attrs.get("co2Emission") or
+        attrs.get("co2") or
+        ""
+    )
+    co2_str = str(co2_val)
+    if co2_str and co2_str != "None":
+        co2 = int("".join(filter(str.isdigit, co2_str)) or 0)
+        if co2 == 0:
+            co2 = 150 if fuel_type == "petrol" else 130
     else:
         co2 = 150 if fuel_type == "petrol" else 130
+
+    # Get title
+    title = (
+        item.get("title") or
+        item.get("name") or
+        f"{make} {model}"
+    )
 
     return VehicleData(
         make=make,
@@ -259,9 +340,9 @@ def parse_autoscout24_result(item: dict, url: str) -> VehicleData:
         co2_gkm=co2,
         first_registration_date=first_reg,
         listing_url=url,
-        source="autoscout24",
-        title=item.get("title", f"{make} {model}"),
-        features=item.get("features", []),
+        source="autoscout24.de",
+        title=title,
+        features=item.get("features", item.get("equipment", [])),
         attributes=attrs,
     )
 
@@ -315,9 +396,14 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
 
         else:  # autoscout24
             actor_id = APIFY_ACTORS["autoscout24"]
+            # dtrungtin~autoscout24-scraper expects this input format
             input_data = {
                 "startUrls": [{"url": url}],
                 "maxItems": 1,
+                "proxy": {
+                    "useApifyProxy": True,
+                    "apifyProxyGroups": ["RESIDENTIAL"]
+                }
             }
             results = await run_apify_actor(actor_id, input_data, apify_token)
 

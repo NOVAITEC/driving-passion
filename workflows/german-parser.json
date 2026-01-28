@@ -76,7 +76,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.apify.com/v2/acts/ivanvs~autoscout-scraper/runs",
+        "url": "https://api.apify.com/v2/acts/dtrungtin~autoscout24-scraper/runs",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -88,7 +88,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"startUrls\": [\n    {\n      \"url\": \"{{ $json.body.url }}\"\n    }\n  ],\n  \"maxItems\": 1\n}",
+        "jsonBody": "={\n  \"startUrls\": [\n    {\n      \"url\": \"{{ $json.body.url }}\"\n    }\n  ],\n  \"maxItems\": 1,\n  \"proxy\": {\n    \"useApifyProxy\": true,\n    \"apifyProxyGroups\": [\"RESIDENTIAL\"]\n  }\n}",
         "options": {}
       },
       "id": "apify-autoscout",

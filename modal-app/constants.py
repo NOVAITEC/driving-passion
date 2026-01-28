@@ -71,11 +71,11 @@ MARGIN_THRESHOLDS = {
 
 APIFY_ACTORS = {
     "mobile_de": "3x1t~mobile-de-scraper-ppr",
-    "autoscout24": "3x1t~autoscout24-scraper",
+    "autoscout24": "dtrungtin~autoscout24-scraper",  # Supports autoscout24.de
 }
 
 # =============================================================================
 # AI CONFIGURATIE
 # =============================================================================
 
-DEFAULT_AI_MODEL = "anthropic/claude-sonnet-4-20250514"
+DEFAULT_AI_MODEL = "anthropic/claude-sonnet-4"
