@@ -79,8 +79,7 @@ Analyze a German vehicle listing and calculate import margin.
 **Request:**
 ```json
 {
-  "url": "https://www.mobile.de/...",
-  "email": "user@example.com"
+  "url": "https://www.mobile.de/..."
 }
 ```
 
