@@ -68,14 +68,23 @@ Push naar main branch, Vercel deployed automatisch.
 - autoscout24.de
 
 ### Nederlandse markt (vergelijking):
-- AutoScout24 NL
+- AutoScout24 NL (direct scraping)
+- Marktplaats.nl (via Apify actor)
+
+Beide bronnen worden parallel doorzocht voor betere marktdekking.
 
 ## Apify Actors
 
-- **mobile.de:** `3x1t~mobile-de-scraper-ppr`
-- **autoscout24.de:** `3x1t~autoscout24-scraper-ppr`
+### Duitse bronnen (input):
+- **mobile.de:** `3x1t~mobile-de-scraper-ppr` (Pay-per-result)
+- **autoscout24.de:** `3x1t~autoscout24-scraper-ppr` (Pay-per-result)
 
 Beide actors zijn van dezelfde ontwikkelaar (3x1t).
+
+### Nederlandse bronnen (vergelijking):
+- **marktplaats.nl:** `ivanvs~marktplaats-scraper` (Pay-per-event)
+
+Om de Marktplaats actor te gebruiken, ga naar https://apify.com/ivanvs/marktplaats-scraper en klik "Try for free".
 
 ## AI Model
 
@@ -96,6 +105,43 @@ Gebaseerd op 2026 Belastingdienst forfaitaire tabel. Zie `modal-app/constants.py
 - Controleer of de Apify actor `3x1t~autoscout24-scraper-ppr` beschikbaar is in je account
 - Ga naar https://apify.com/3x1t/autoscout24-scraper-ppr en klik "Try for free"
 
+### Marktplaats resultaten ontbreken
+- Controleer of de actor `ivanvs~marktplaats-scraper` is toegevoegd aan je Apify account
+- Ga naar https://apify.com/ivanvs/marktplaats-scraper en klik "Try for free"
+- Check Modal logs: `modal logs driving-passion`
+
 ### Apify fout
 - Controleer of de Modal secret `apify-secret` correct is ingesteld
 - Controleer Apify account credits
+
+## Flow Diagram
+
+```
+Duitse advertentie (mobile.de / autoscout24.de)
+                    │
+                    ▼
+            ┌───────────────┐
+            │ Scrape vehicle│
+            │   via Apify   │
+            └───────┬───────┘
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+┌───────────────┐       ┌───────────────┐
+│ AutoScout24 NL│       │  Marktplaats  │
+│   (direct)    │       │  (via Apify)  │
+└───────┬───────┘       └───────┬───────┘
+        │                       │
+        └───────────┬───────────┘
+                    ▼
+            ┌───────────────┐
+            │  AI Taxatie   │
+            │ (OpenRouter)  │
+            └───────┬───────┘
+                    │
+                    ▼
+            ┌───────────────┐
+            │ BPM + Marge   │
+            │  berekening   │
+            └───────────────┘
+```
