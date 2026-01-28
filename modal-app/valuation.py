@@ -13,6 +13,22 @@ from dutch_market import DutchComparable
 
 
 @dataclass
+class PriceBreakdown:
+    """Breakdown of how the price was determined."""
+    base_value: int  # Basiswaarde obv vergelijkbare auto's
+    mileage_adjustment: int  # Correctie voor kilometerstand
+    options_adjustment: int  # Correctie voor opties/uitrusting
+    condition_adjustment: int  # Correctie voor staat/leeftijd
+    market_adjustment: int  # Correctie voor marktomstandigheden
+    explanation: str  # Uitleg per onderdeel
+
+    def total(self) -> int:
+        return (self.base_value + self.mileage_adjustment +
+                self.options_adjustment + self.condition_adjustment +
+                self.market_adjustment)
+
+
+@dataclass
 class Valuation:
     """AI valuation result."""
     estimated_retail_price: int
@@ -21,6 +37,7 @@ class Valuation:
     reasoning: str = ""
     pros: list = None
     cons: list = None
+    price_breakdown: PriceBreakdown = None
 
     def __post_init__(self):
         if self.pros is None:
@@ -77,19 +94,36 @@ VERGELIJKBARE AUTO'S IN NEDERLAND:
 {comp_text}
 
 OPDRACHT:
-Geef een realistische taxatie voor dit voertuig op de Nederlandse markt. Let op:
-1. Vergelijk met de aangeboden vergelijkbare auto's
-2. Houd rekening met de opties en uitrusting
-3. Geef zowel een retail prijs (showroom) als een snelle verkoop prijs (handelswaarde)
+Geef een realistische taxatie voor dit voertuig op de Nederlandse markt.
+
+Je moet de volgende zaken beoordelen:
+1. PRIJSOPBOUW: Leg stap voor stap uit hoe je tot de prijs komt:
+   - Start met een basiswaarde (gebaseerd op vergelijkbare auto's of marktkennis)
+   - Pas aan voor kilometerstand (hoger/lager dan gemiddeld)
+   - Pas aan voor opties en uitrusting (waardevol of basis)
+   - Pas aan voor staat en leeftijd
+   - Pas aan voor huidige marktomstandigheden
+
+2. PLUSPUNTEN: Noem de sterke punten van deze auto die de waarde verhogen of aantrekkelijk maken voor kopers (bijv. uitrusting, betrouwbaarheid, zuinigheid, populariteit)
+
+3. AANDACHTSPUNTEN: Noem de zwakke punten of risico's (bijv. hoge km-stand, dure onderdelen, hoge onderhoudskosten, beperkte vraag, bekende problemen)
 
 Antwoord ALLEEN in dit exacte JSON formaat:
 {{
     "estimatedRetailPrice": <getal>,
     "estimatedQuickSalePrice": <getal>,
     "confidence": <0.0-1.0>,
-    "reasoning": "<korte uitleg in het Nederlands>",
-    "pros": ["<pluspunt 1>", "<pluspunt 2>"],
-    "cons": ["<aandachtspunt 1>", "<aandachtspunt 2>"]
+    "reasoning": "<korte samenvatting van je analyse in 1-2 zinnen>",
+    "priceBreakdown": {{
+        "baseValue": <basiswaarde in EUR>,
+        "mileageAdjustment": <positief of negatief getal>,
+        "optionsAdjustment": <positief of negatief getal>,
+        "conditionAdjustment": <positief of negatief getal>,
+        "marketAdjustment": <positief of negatief getal>,
+        "explanation": "<uitleg per onderdeel, bijv. 'Basiswaarde €X obv vergelijkbare auto's. Km-correctie -€Y wegens hoge kilometerstand. Opties +€Z voor navigatie en leer. etc.'>"
+    }},
+    "pros": ["<pluspunt 1>", "<pluspunt 2>", "<pluspunt 3>"],
+    "cons": ["<aandachtspunt 1>", "<aandachtspunt 2>", "<aandachtspunt 3>"]
 }}"""
 
     return prompt
@@ -176,6 +210,19 @@ async def valuate_vehicle(
     try:
         result = await call_openrouter(prompt, api_key, model)
 
+        # Parse price breakdown if present
+        price_breakdown = None
+        if "priceBreakdown" in result:
+            pb = result["priceBreakdown"]
+            price_breakdown = PriceBreakdown(
+                base_value=int(pb.get("baseValue", 0)),
+                mileage_adjustment=int(pb.get("mileageAdjustment", 0)),
+                options_adjustment=int(pb.get("optionsAdjustment", 0)),
+                condition_adjustment=int(pb.get("conditionAdjustment", 0)),
+                market_adjustment=int(pb.get("marketAdjustment", 0)),
+                explanation=pb.get("explanation", ""),
+            )
+
         return Valuation(
             estimated_retail_price=int(result.get("estimatedRetailPrice", 0)),
             estimated_quick_sale_price=int(result.get("estimatedQuickSalePrice", 0)),
@@ -183,6 +230,7 @@ async def valuate_vehicle(
             reasoning=result.get("reasoning", ""),
             pros=result.get("pros", []),
             cons=result.get("cons", []),
+            price_breakdown=price_breakdown,
         )
 
     except Exception as e:
@@ -210,7 +258,7 @@ async def valuate_vehicle(
 
 def valuation_to_dict(valuation: Valuation) -> dict:
     """Convert Valuation to dictionary for JSON serialization."""
-    return {
+    result = {
         "estimatedRetailPrice": valuation.estimated_retail_price,
         "estimatedQuickSalePrice": valuation.estimated_quick_sale_price,
         "confidence": valuation.confidence,
@@ -218,3 +266,18 @@ def valuation_to_dict(valuation: Valuation) -> dict:
         "pros": valuation.pros,
         "cons": valuation.cons,
     }
+
+    # Add price breakdown if available
+    if valuation.price_breakdown:
+        pb = valuation.price_breakdown
+        result["priceBreakdown"] = {
+            "baseValue": pb.base_value,
+            "mileageAdjustment": pb.mileage_adjustment,
+            "optionsAdjustment": pb.options_adjustment,
+            "conditionAdjustment": pb.condition_adjustment,
+            "marketAdjustment": pb.market_adjustment,
+            "calculatedTotal": pb.total(),
+            "explanation": pb.explanation,
+        }
+
+    return result

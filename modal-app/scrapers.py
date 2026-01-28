@@ -53,23 +53,37 @@ def detect_source(url: str) -> str:
     url_lower = url.lower()
     if "mobile.de" in url_lower or "suchen.mobile.de" in url_lower:
         return "mobile.de"
-    if "autoscout24.de" in url_lower or "autoscout24.com" in url_lower:
+    # AutoScout24 Germany - various URL formats
+    if any(domain in url_lower for domain in [
+        "autoscout24.de",
+        "autoscout24.com/de",  # International site, German section
+        "www.autoscout24.de",
+    ]):
         return "autoscout24"
     return "unknown"
 
 
 def extract_listing_id(url: str, source: str) -> Optional[str]:
     """Extract listing ID from URL."""
+    # Remove query parameters first
+    clean_url = url.split("?")[0].rstrip("/")
+
     if source == "mobile.de":
         # https://suchen.mobile.de/fahrzeuge/details.html?id=446136631
         if "id=" in url:
             return url.split("id=")[1].split("&")[0]
     elif source == "autoscout24":
-        # https://www.autoscout24.de/angebote/xxx-xxx-xxx-guid
-        parts = url.rstrip("/").split("/")
+        # https://www.autoscout24.de/angebote/citroen-berlingo-...-479363a0-1413-4b65-8903-e38f1ec02db8
+        parts = clean_url.split("/")
         if parts:
             return parts[-1]
     return None
+
+
+def clean_autoscout24_url(url: str) -> str:
+    """Clean AutoScout24 URL by removing tracking parameters."""
+    # Remove query parameters - they're just tracking info
+    return url.split("?")[0]
 
 
 async def run_apify_actor(
@@ -90,6 +104,9 @@ async def run_apify_actor(
     Returns:
         Actor run results
     """
+    print(f"[APIFY] Starting actor: {actor_id}")
+    print(f"[APIFY] Input data: {input_data}")
+
     async with httpx.AsyncClient() as client:
         # Start the actor run
         start_url = f"https://api.apify.com/v2/acts/{actor_id}/runs"
@@ -100,9 +117,13 @@ async def run_apify_actor(
             json=input_data,
             timeout=30,
         )
+        print(f"[APIFY] Start response status: {response.status_code}")
+        if response.status_code != 200 and response.status_code != 201:
+            print(f"[APIFY] Start response body: {response.text}")
         response.raise_for_status()
         run_data = response.json()
         run_id = run_data["data"]["id"]
+        print(f"[APIFY] Actor run started with ID: {run_id}")
 
         # Poll for completion
         status_url = f"https://api.apify.com/v2/actor-runs/{run_id}"
@@ -120,10 +141,12 @@ async def run_apify_actor(
             response.raise_for_status()
             status_data = response.json()
             status = status_data["data"]["status"]
+            print(f"[APIFY] Actor run status: {status}")
 
             if status == "SUCCEEDED":
                 break
             elif status in ["FAILED", "ABORTED", "TIMED-OUT"]:
+                print(f"[APIFY] Actor run failed! Full response: {status_data}")
                 raise Exception(f"Actor run failed with status: {status}")
 
             await asyncio.sleep(2)
@@ -326,43 +349,84 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
 
 def parse_autoscout24_result(item: dict, url: str) -> VehicleData:
     """Parse AutoScout24 scraper result into VehicleData."""
-    # Handle different output formats from various AutoScout24 scrapers
-    attrs = item.get("vehicleDetails", item.get("attributes", item.get("vehicle", {})))
+    # The 3x1t~autoscout24-scraper-ppr returns data with:
+    # - brand, model at top level
+    # - attributes dict with keys like "First Registration", "Mileage", "Fuel"
+    # - price as nested object: price.total.amount
+    attrs = item.get("attributes", {})
+    if isinstance(attrs, str):
+        attrs = {}
+
+
+    # Helper function to get value from item or attrs with flexible key matching
+    def get_field(keys):
+        """Try multiple key variations to find a value."""
+        for key in keys:
+            # Try item first
+            if key in item and item[key]:
+                return item[key]
+            # Try attrs
+            if key in attrs and attrs[key]:
+                return attrs[key]
+            # Try lowercase/case-insensitive
+            key_lower = key.lower()
+            for d in [item, attrs]:
+                for k, v in d.items():
+                    if k.lower() == key_lower and v:
+                        return v
+        return None
 
     # Try multiple field names for make/model (different scrapers use different names)
-    make = (
-        item.get("make") or
-        item.get("brand") or
-        attrs.get("make") or
-        attrs.get("brand") or
-        "Unknown"
-    )
-    model = (
-        item.get("model") or
-        item.get("modelLine") or
-        attrs.get("model") or
-        "Unknown"
-    )
+    make = get_field(["make", "brand", "Brand", "Make", "manufacturer"]) or "Unknown"
+    model = get_field(["model", "modelLine", "Model", "ModelLine"]) or "Unknown"
+
+    # Parse make/model from title if needed
+    title = get_field(["title", "name", "Title", "Name"]) or ""
+    if (make == "Unknown" or model == "Unknown") and title:
+        # Extract from title like "BMW 320d xDrive..."
+        brands = ["Mercedes-Benz", "BMW", "Audi", "Volkswagen", "VW", "Porsche",
+                  "Ford", "Opel", "Skoda", "Seat", "Renault", "Peugeot", "Citroën",
+                  "Fiat", "Alfa Romeo", "Volvo", "Toyota", "Honda", "Mazda",
+                  "Nissan", "Hyundai", "Kia", "Lexus", "Mini", "Land Rover",
+                  "Jaguar", "Jeep", "Tesla", "Chevrolet", "Dodge"]
+        for brand in brands:
+            if title.lower().startswith(brand.lower()):
+                if make == "Unknown":
+                    make = brand
+                if model == "Unknown":
+                    model_part = title[len(brand):].strip()
+                    model_words = model_part.split()[:3]
+                    model = " ".join(model_words)
+                break
+        if make == "Unknown" and title:
+            parts = title.split()
+            if len(parts) >= 1:
+                make = parts[0]
+            if len(parts) >= 2 and model == "Unknown":
+                model = " ".join(parts[1:3])
 
     # Get first registration - handle multiple formats
-    first_reg_str = (
-        item.get("firstRegistration") or
-        item.get("registration") or
-        attrs.get("firstRegistration") or
-        item.get("year") or
-        ""
-    )
+    first_reg_str = get_field([
+        "firstRegistration", "registration", "firstReg",
+        "First Registration", "Registration", "year"
+    ]) or ""
     first_reg = datetime.now()
     year = datetime.now().year
 
     if first_reg_str:
         try:
-            first_reg_str = str(first_reg_str)
+            first_reg_str = str(first_reg_str).strip()
             if "/" in first_reg_str:
-                # Format: MM/YYYY
-                month, yr = first_reg_str.split("/")
-                first_reg = datetime(int(yr), int(month), 1)
-                year = int(yr)
+                # Format: MM/YYYY or YYYY/MM
+                parts = first_reg_str.split("/")
+                if len(parts) == 2:
+                    if len(parts[0]) == 4:  # YYYY/MM
+                        year = int(parts[0])
+                        month = int(parts[1])
+                    else:  # MM/YYYY
+                        month = int(parts[0])
+                        year = int(parts[1])
+                    first_reg = datetime(year, month, 1)
             elif "-" in first_reg_str:
                 # Format: YYYY-MM or YYYY-MM-DD
                 parts = first_reg_str.split("-")
@@ -377,75 +441,120 @@ def parse_autoscout24_result(item: dict, url: str) -> VehicleData:
             pass
 
     # Override year if explicitly provided
-    if item.get("year"):
+    year_field = get_field(["year", "Year", "productionYear"])
+    if year_field:
         try:
-            year = int(item.get("year"))
+            year = int(str(year_field).strip())
         except:
             pass
 
     # Get mileage - try multiple field names
-    mileage_str = str(
-        item.get("mileage") or
-        item.get("km") or
-        item.get("mileageInKm") or
-        attrs.get("mileage") or
-        "0"
-    )
+    mileage_val = get_field([
+        "mileage", "km", "mileageInKm", "Mileage", "Km",
+        "kilometerstand", "kilometers"
+    ]) or "0"
+    mileage_str = str(mileage_val)
     mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
 
-    # Get price - try multiple field names
-    price_val = (
-        item.get("price") or
-        item.get("priceInEur") or
-        item.get("priceNumeric") or
-        attrs.get("price") or
-        "0"
-    )
-    price_str = str(price_val)
-    price = int("".join(filter(str.isdigit, price_str.split(".")[0].split(",")[0])) or 0)
+    # Get price - handle nested structure from 3x1t scraper: price.total.amount
+    price = 0
+    price_obj = item.get("price")
+    if isinstance(price_obj, dict):
+        # Nested structure: price.total.amount
+        total_obj = price_obj.get("total", {})
+        if isinstance(total_obj, dict):
+            price = total_obj.get("amount", 0)
+            if price:
+                price = int(price)
+        # Also try price.value or price.amount directly
+        if not price:
+            price = price_obj.get("amount", price_obj.get("value", 0))
+            if price:
+                price = int(price)
+    elif price_obj:
+        # Direct price value
+        price_str = str(price_obj)
+        # Handle prices like "23.600" (European format) or "23600" or "€ 23.600"
+        price_str = price_str.replace("€", "").replace(" ", "").strip()
+        # Handle European decimal separator (. as thousands, , as decimal)
+        if "." in price_str and "," not in price_str:
+            parts = price_str.split(".")
+            if len(parts) == 2 and len(parts[1]) == 3:
+                price_str = price_str.replace(".", "")
+        price_str = price_str.split(",")[0]
+        price = int("".join(filter(str.isdigit, price_str)) or 0)
+
+    # Fallback to other field names
+    if not price:
+        price_val = get_field([
+            "priceInEur", "priceNumeric", "Price", "priceEur", "askingPrice"
+        ]) or "0"
+        price_str = str(price_val)
+        price_str = price_str.replace("€", "").replace(" ", "").strip()
+        if "." in price_str and "," not in price_str:
+            parts = price_str.split(".")
+            if len(parts) == 2 and len(parts[1]) == 3:
+                price_str = price_str.replace(".", "")
+        price_str = price_str.split(",")[0]
+        price = int("".join(filter(str.isdigit, price_str)) or 0)
+
+
+    # Sanity check - price should be reasonable
+    if price < 100 or price > 500000:
+        price = 0
 
     # Get fuel type
-    fuel_raw = (
-        item.get("fuelType") or
-        item.get("fuel") or
-        attrs.get("fuelType") or
-        attrs.get("fuel") or
-        "petrol"
-    )
-    fuel_type = normalize_fuel_type(fuel_raw)
+    fuel_raw = get_field([
+        "fuelType", "fuel", "Fuel", "FuelType", "Kraftstoff"
+    ]) or "petrol"
+    fuel_type = normalize_fuel_type(str(fuel_raw))
 
     # Get transmission
-    trans_raw = (
-        item.get("transmission") or
-        item.get("gearbox") or
-        attrs.get("transmission") or
-        "automatic"
-    )
-    transmission = normalize_transmission(trans_raw)
+    trans_raw = get_field([
+        "transmission", "gearbox", "Transmission", "Gearbox", "Getriebe"
+    ]) or "automatic"
+    transmission = normalize_transmission(str(trans_raw))
 
-    # Get CO2 - try multiple field names
-    co2_val = (
-        item.get("co2Emission") or
-        item.get("co2") or
-        item.get("emissionsCO2") or
-        attrs.get("co2Emission") or
-        attrs.get("co2") or
-        ""
-    )
-    co2_str = str(co2_val)
-    if co2_str and co2_str != "None":
-        co2 = int("".join(filter(str.isdigit, co2_str)) or 0)
-        if co2 == 0:
-            co2 = 150 if fuel_type == "petrol" else 130
-    else:
-        co2 = 150 if fuel_type == "petrol" else 130
+    # Get CO2 - try multiple field names (including special characters)
+    co2_val = get_field([
+        "co2Emission", "co2", "emissionsCO2", "CO2", "Co2",
+        "co2_gkm", "emissionCO2", "CO₂ emissions"
+    ])
+    # Also check attrs directly for special character keys
+    if not co2_val and attrs:
+        for key in attrs.keys():
+            if "co2" in key.lower() or "co₂" in key.lower():
+                co2_val = attrs[key]
+                break
+    co2 = 150 if fuel_type == "petrol" else 130  # Default
+    if co2_val:
+        co2_str = str(co2_val)
+        if co2_str and co2_str != "None":
+            # Extract just the number from strings like "231 g/km (comb.)"
+            digits = "".join(filter(str.isdigit, co2_str.split()[0] if co2_str.split() else co2_str))
+            if digits:
+                co2 = int(digits)
+                # Sanity check
+                if co2 < 50 or co2 > 400:
+                    co2 = 150 if fuel_type == "petrol" else 130
 
-    # Get title
-    title = (
-        item.get("title") or
-        item.get("name") or
-        f"{make} {model}"
-    )
+    # Estimate CO2 from power if not available
+    if co2 in [130, 150]:  # Still default
+        power_val = get_field(["power", "kw", "powerKw", "Power", "Kw"])
+        if power_val:
+            kw_str = str(power_val)
+            kw_digits = "".join(filter(str.isdigit, kw_str.split("kW")[0]))
+            if kw_digits:
+                kw = int(kw_digits)
+                if fuel_type == "diesel":
+                    co2 = min(250, max(100, int(kw * 1.0)))
+                elif fuel_type == "electric":
+                    co2 = 0
+                else:
+                    co2 = min(300, max(100, int(kw * 1.3)))
+
+    if not title:
+        title = f"{make} {model}"
 
     return VehicleData(
         make=make,
@@ -461,7 +570,7 @@ def parse_autoscout24_result(item: dict, url: str) -> VehicleData:
         source="autoscout24.de",
         title=title,
         features=item.get("features", item.get("equipment", [])),
-        attributes=attrs,
+        attributes=attrs if isinstance(attrs, dict) else {},
     )
 
 
@@ -514,15 +623,16 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
 
         else:  # autoscout24
             actor_id = APIFY_ACTORS["autoscout24"]
-            # dtrungtin~autoscout24-scraper expects this input format
+            # Clean the URL - remove tracking parameters
+            clean_url = clean_autoscout24_url(url)
+            # 3x1t~autoscout24-scraper-ppr expects startUrls as array of STRINGS (not objects!)
             input_data = {
-                "startUrls": [{"url": url}],
+                "startUrls": [clean_url],
                 "maxItems": 1,
-                "proxy": {
-                    "useApifyProxy": True,
-                    "apifyProxyGroups": ["RESIDENTIAL"]
-                }
             }
+            print(f"[AUTOSCOUT24] Using actor: {actor_id}")
+            print(f"[AUTOSCOUT24] Clean URL: {clean_url}")
+            print(f"[AUTOSCOUT24] Input data: {input_data}")
             results = await run_apify_actor(actor_id, input_data, apify_token)
 
             if not results:
@@ -532,7 +642,7 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
                     error_message="Listing not found or no longer available.",
                 )
 
-            vehicle = parse_autoscout24_result(results[0], url)
+            vehicle = parse_autoscout24_result(results[0], clean_url)
 
         # Validate we got real data
         if vehicle.price_eur == 0:
@@ -552,11 +662,16 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
             error_details=str(e),
         )
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[SCRAPER_ERROR] Source: {source}, URL: {url}")
+        print(f"[SCRAPER_ERROR] Exception: {e}")
+        print(f"[SCRAPER_ERROR] Traceback: {error_trace}")
         return ScrapeResult(
             success=False,
             error_type="SCRAPER_ERROR",
-            error_message="Failed to scrape listing.",
-            error_details=str(e),
+            error_message=f"Failed to scrape listing from {source}.",
+            error_details=f"{str(e)} | {error_trace[:500]}",
         )
 
 
