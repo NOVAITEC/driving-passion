@@ -1,0 +1,374 @@
+'use client'
+
+import { useState, FormEvent } from 'react'
+
+interface VehicleData {
+  make: string
+  model: string
+  year: number
+  mileage_km: number
+  price_eur: number
+  fuelType: string
+  transmission: string
+  co2_gkm: number
+  firstRegistrationDate: string
+  title?: string
+  features?: string[]
+}
+
+interface BPMData {
+  grossBPM: number
+  restBPM: number
+  depreciationPercentage: number
+  dieselSurcharge: number
+  vehicleAgeMonths: number
+}
+
+interface CostsData {
+  germanPrice: number
+  bpm: number
+  transport: number
+  rdwInspection: number
+  licensePlates: number
+  handlingFee: number
+  napCheck: number
+  totalImportCosts: number
+  totalCost: number
+}
+
+interface ResultData {
+  margin: number
+  marginPercentage: number
+  safeMargin: number
+  recommendation: 'GO' | 'CONSIDER' | 'NO_GO'
+}
+
+interface AIValuation {
+  estimatedRetailPrice: number
+  estimatedQuickSalePrice: number
+  confidence: number
+  reasoning?: string
+  pros?: string[]
+  cons?: string[]
+}
+
+interface ComparableVehicle {
+  title: string
+  price_eur: number
+  mileage_km: number
+  year?: number
+  listingUrl?: string
+  location?: string
+}
+
+interface AnalysisResult {
+  success: boolean
+  requestId?: string
+  data?: {
+    vehicle: VehicleData
+    pricing: {
+      germanPrice: number
+      dutchMarketValue: number
+      dutchMarketValueRange: { low: number; high: number }
+      comparablesCount: number
+      sources: string[]
+    }
+    bpm: BPMData
+    costs: CostsData
+    result: ResultData
+    aiValuation: AIValuation
+    comparables: ComparableVehicle[]
+    marketStats: { count: number; avgPrice: number; minPrice: number; maxPrice: number }
+  }
+  error?: { type: string; message: string; details?: string }
+  meta?: { calculatedAt: string; processingTimeMs: number }
+}
+
+const LOADING_STEPS = [
+  { id: 1, label: 'Advertentie ophalen...' },
+  { id: 2, label: 'Voertuiggegevens analyseren...' },
+  { id: 3, label: 'BPM berekenen...' },
+  { id: 4, label: 'Nederlandse markt doorzoeken...' },
+  { id: 5, label: 'AI taxatie uitvoeren...' },
+  { id: 6, label: 'Marge berekenen...' },
+]
+
+export default function Home() {
+  const [url, setUrl] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [currentStep, setCurrentStep] = useState(0)
+  const [result, setResult] = useState<AnalysisResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!url.trim()) {
+      setError('Vul een URL in van mobile.de of AutoScout24')
+      return
+    }
+
+    setIsLoading(true)
+    setError(null)
+    setResult(null)
+    setCurrentStep(0)
+
+    const stepInterval = setInterval(() => {
+      setCurrentStep(prev => prev < LOADING_STEPS.length - 1 ? prev + 1 : prev)
+    }, 2500)
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_MODAL_API_URL
+      if (!apiUrl) {
+        throw new Error('API URL niet geconfigureerd. Stel NEXT_PUBLIC_MODAL_API_URL in.')
+      }
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim() }),
+      })
+
+      const data: AnalysisResult = await response.json()
+      if (!data.success) {
+        throw new Error(data.error?.message || 'Er ging iets mis bij de analyse')
+      }
+      setResult(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Er ging iets mis')
+    } finally {
+      clearInterval(stepInterval)
+      setIsLoading(false)
+    }
+  }
+
+  const formatCurrency = (value: number) => new Intl.NumberFormat('nl-NL', {
+    style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 0,
+  }).format(value)
+
+  const formatNumber = (value: number) => new Intl.NumberFormat('nl-NL').format(value)
+
+  const getRecommendationStyle = (rec: string) => {
+    switch (rec) {
+      case 'GO': return 'recommendation-go'
+      case 'CONSIDER': return 'recommendation-consider'
+      default: return 'recommendation-no-go'
+    }
+  }
+
+  const getRecommendationText = (rec: string) => {
+    switch (rec) {
+      case 'GO': return 'Kopen!'
+      case 'CONSIDER': return 'Overwegen'
+      default: return 'Niet doen'
+    }
+  }
+
+  return (
+    <main className="min-h-screen py-8 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-6xl mx-auto">
+        <div className="text-center mb-10">
+          <h1 className="text-4xl font-bold text-slate-900 mb-3">Auto Import Calculator</h1>
+          <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+            Plak een link van een Duitse advertentie en ontdek binnen seconden of de auto winstgevend is om te importeren.
+          </p>
+        </div>
+
+        <div className="grid lg:grid-cols-2 gap-8">
+          <div className="card">
+            <h2 className="text-xl font-semibold mb-6">Advertentie Analyseren</h2>
+            <form onSubmit={handleSubmit}>
+              <div className="mb-6">
+                <label htmlFor="url" className="block text-sm font-medium text-slate-700 mb-2">
+                  Duitse advertentie URL
+                </label>
+                <input
+                  type="url"
+                  id="url"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://www.mobile.de/..."
+                  className="input-field"
+                  disabled={isLoading}
+                />
+                <p className="mt-2 text-sm text-slate-500">Ondersteund: mobile.de en AutoScout24 Duitsland</p>
+              </div>
+              <button type="submit" disabled={isLoading || !url.trim()} className="btn-primary">
+                {isLoading ? 'Analyseren...' : 'Analyseer Advertentie'}
+              </button>
+            </form>
+
+            {error && (
+              <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl">
+                <p className="text-red-700 text-sm">{error}</p>
+              </div>
+            )}
+
+            {isLoading && (
+              <div className="mt-8 space-y-3">
+                {LOADING_STEPS.map((step, index) => (
+                  <div
+                    key={step.id}
+                    className={`flex items-center gap-3 p-3 rounded-lg transition-all duration-300 ${
+                      index < currentStep ? 'bg-emerald-50 text-emerald-700'
+                        : index === currentStep ? 'bg-primary-50 text-primary-700'
+                        : 'bg-slate-50 text-slate-400'
+                    }`}
+                  >
+                    {index < currentStep ? (
+                      <svg className="w-5 h-5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : index === currentStep ? (
+                      <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <div className="w-5 h-5 border-2 border-slate-300 rounded-full" />
+                    )}
+                    <span className="text-sm font-medium">{step.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-8 pt-6 border-t border-slate-200">
+              <h3 className="text-sm font-medium text-slate-700 mb-3">Voorbeeld URL:</h3>
+              <button
+                type="button"
+                onClick={() => setUrl('https://suchen.mobile.de/fahrzeuge/details.html?id=446136631')}
+                className="text-sm text-primary-600 hover:text-primary-700 underline"
+              >
+                mobile.de - Test advertentie
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            {result?.data ? (
+              <>
+                <div className={`card ${
+                  result.data.result.recommendation === 'GO' ? 'bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200'
+                    : result.data.result.recommendation === 'CONSIDER' ? 'bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200'
+                    : 'bg-gradient-to-br from-red-50 to-red-100 border-red-200'
+                }`}>
+                  <div className="text-center">
+                    <span className={`recommendation-badge ${getRecommendationStyle(result.data.result.recommendation)}`}>
+                      {getRecommendationText(result.data.result.recommendation)}
+                    </span>
+                    <div className="mt-4">
+                      <p className="text-4xl font-bold text-slate-900">{formatCurrency(result.data.result.margin)}</p>
+                      <p className="text-sm text-slate-600 mt-1">Verwachte winst ({result.data.result.marginPercentage}%)</p>
+                    </div>
+                    <div className="mt-4 pt-4 border-t border-slate-200/50">
+                      <p className="text-sm text-slate-600">
+                        Veilige marge: <span className="font-semibold">{formatCurrency(result.data.result.safeMargin)}</span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <h3 className="font-semibold text-lg mb-4">Voertuig</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between"><span className="text-slate-600">Auto</span><span className="font-medium">{result.data.vehicle.make} {result.data.vehicle.model}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Bouwjaar</span><span className="font-medium">{result.data.vehicle.year}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Kilometerstand</span><span className="font-medium">{formatNumber(result.data.vehicle.mileage_km)} km</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Brandstof</span><span className="font-medium capitalize">{result.data.vehicle.fuelType}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">CO2 uitstoot</span><span className="font-medium">{result.data.vehicle.co2_gkm} g/km</span></div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <h3 className="font-semibold text-lg mb-4">Kostenopbouw</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between"><span className="text-slate-600">Duitse prijs</span><span className="font-medium">{formatCurrency(result.data.costs.germanPrice)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">BPM</span><span className="font-medium">{formatCurrency(result.data.costs.bpm)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Transport</span><span className="font-medium">{formatCurrency(result.data.costs.transport)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">RDW + Kenteken</span><span className="font-medium">{formatCurrency(result.data.costs.rdwInspection + result.data.costs.licensePlates)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Overige kosten</span><span className="font-medium">{formatCurrency(result.data.costs.handlingFee + result.data.costs.napCheck)}</span></div>
+                    <div className="flex justify-between pt-3 border-t border-slate-200">
+                      <span className="font-semibold">Totale investering</span>
+                      <span className="font-bold text-lg">{formatCurrency(result.data.costs.totalCost)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <h3 className="font-semibold text-lg mb-4">Nederlandse Marktwaarde</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between"><span className="text-slate-600">Geschatte retailprijs</span><span className="font-medium">{formatCurrency(result.data.pricing.dutchMarketValue)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Snelle verkoop prijs</span><span className="font-medium">{formatCurrency(result.data.pricing.dutchMarketValueRange.low)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Vergelijkbare auto's</span><span className="font-medium">{result.data.pricing.comparablesCount}</span></div>
+                  </div>
+                  {result.data.aiValuation?.reasoning && (
+                    <div className="mt-4 pt-4 border-t border-slate-200">
+                      <p className="text-sm text-slate-600 mb-2 font-medium">AI Analyse:</p>
+                      <p className="text-sm text-slate-700">{result.data.aiValuation.reasoning}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="card">
+                  <h3 className="font-semibold text-lg mb-4">BPM Berekening</h3>
+                  <div className="space-y-3 text-sm">
+                    <div className="flex justify-between"><span className="text-slate-600">Bruto BPM (nieuw)</span><span className="font-medium">{formatCurrency(result.data.bpm.grossBPM)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Leeftijd voertuig</span><span className="font-medium">{result.data.bpm.vehicleAgeMonths} maanden</span></div>
+                    <div className="flex justify-between"><span className="text-slate-600">Afschrijving</span><span className="font-medium">{result.data.bpm.depreciationPercentage}%</span></div>
+                    {result.data.bpm.dieselSurcharge > 0 && (
+                      <div className="flex justify-between"><span className="text-slate-600">Diesel toeslag</span><span className="font-medium">{formatCurrency(result.data.bpm.dieselSurcharge)}</span></div>
+                    )}
+                    <div className="flex justify-between pt-3 border-t border-slate-200">
+                      <span className="font-semibold">Te betalen BPM</span>
+                      <span className="font-bold">{formatCurrency(result.data.bpm.restBPM)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {result.data.comparables && result.data.comparables.length > 0 && (
+                  <div className="card">
+                    <h3 className="font-semibold text-lg mb-4">Vergelijkbare auto's ({result.data.comparables.length})</h3>
+                    <div className="space-y-3 max-h-64 overflow-y-auto">
+                      {result.data.comparables.slice(0, 5).map((comp, index) => (
+                        <div key={index} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
+                          <div>
+                            <p className="font-medium text-sm truncate max-w-[200px]">{comp.title}</p>
+                            <p className="text-xs text-slate-500">{formatNumber(comp.mileage_km)} km{comp.location && ` • ${comp.location}`}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold">{formatCurrency(comp.price_eur)}</p>
+                            {comp.listingUrl && (
+                              <a href={comp.listingUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary-600 hover:underline">Bekijk</a>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {result.meta && (
+                  <p className="text-xs text-slate-400 text-center">
+                    Berekend op {new Date(result.meta.calculatedAt).toLocaleString('nl-NL')} • Verwerkingstijd: {(result.meta.processingTimeMs / 1000).toFixed(1)}s
+                  </p>
+                )}
+              </>
+            ) : !isLoading && (
+              <div className="card text-center py-12">
+                <div className="text-6xl mb-4">🚗</div>
+                <h3 className="text-lg font-semibold text-slate-700 mb-2">Klaar om te analyseren</h3>
+                <p className="text-slate-500 text-sm">
+                  Plak een URL van een Duitse advertentie om te beginnen.
+                  We berekenen automatisch de BPM, zoeken vergelijkbare auto's in Nederland,
+                  en geven je een AI-gestuurde taxatie.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <footer className="mt-12 text-center text-sm text-slate-500">
+          <p>Driving Passion - Auto Import Calculator</p>
+          <p className="text-xs mt-1">BPM tarieven 2026 • Powered by AI</p>
+        </footer>
+      </div>
+    </main>
+  )
+}
