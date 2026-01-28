@@ -94,16 +94,21 @@ async def scrape_vehicle_fn(url: str) -> dict:
 
 @app.function(
     image=image,
-        timeout=60,
+    secrets=[apify_secret],
+    timeout=90,
 )
 async def search_dutch_market_fn(vehicle_data: dict) -> dict:
     """
     Search the Dutch market for comparable vehicles.
+    Searches both AutoScout24 NL and Marktplaats.
     Returns list of comparables as dictionaries.
     """
+    import os
     from datetime import datetime
     from scrapers import VehicleData
     from dutch_market import search_dutch_market, comparable_to_dict, get_market_stats, market_stats_to_dict
+
+    apify_token = os.environ.get("APIFY_TOKEN")
 
     # Reconstruct VehicleData from dict
     vehicle = VehicleData(
@@ -123,12 +128,16 @@ async def search_dutch_market_fn(vehicle_data: dict) -> dict:
         attributes=vehicle_data.get("attributes", {}),
     )
 
-    comparables = await search_dutch_market(vehicle)
+    comparables = await search_dutch_market(vehicle, apify_token)
     stats = get_market_stats(comparables)
+
+    # Get unique sources
+    sources = list(set(c.source for c in comparables))
 
     return {
         "comparables": [comparable_to_dict(c) for c in comparables],
         "stats": market_stats_to_dict(stats),
+        "sources": sources,
     }
 
 
@@ -288,7 +297,7 @@ def calculate_import_margin(url: str) -> dict:
                     "high": round(retail_price * 1.05),
                 },
                 "comparablesCount": market_result["stats"]["count"],
-                "sources": ["autoscout24"],
+                "sources": market_result.get("sources", ["autoscout24"]),
             },
             "bpm": bpm_result,
             "costs": {

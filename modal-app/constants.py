@@ -72,6 +72,7 @@ MARGIN_THRESHOLDS = {
 APIFY_ACTORS = {
     "mobile_de": "3x1t~mobile-de-scraper-ppr",
     "autoscout24": "3x1t~autoscout24-scraper-ppr",  # Same developer as mobile.de
+    "marktplaats": "ivanvs~marktplaats-scraper",  # Dutch marketplace
 }
 
 # =============================================================================

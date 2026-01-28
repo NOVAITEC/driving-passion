@@ -427,15 +427,30 @@ export default function Home() {
 
                 {result.data.comparables && result.data.comparables.length > 0 && (
                   <div className="card">
-                    <h3 className="font-semibold text-lg mb-4">Vergelijkbare auto's ({result.data.comparables.length})</h3>
+                    <h3 className="font-semibold text-lg mb-4">
+                      Vergelijkbare auto's ({result.data.comparables.length})
+                      {result.data.pricing.sources && result.data.pricing.sources.length > 0 && (
+                        <span className="text-xs font-normal text-slate-500 ml-2">
+                          via {result.data.pricing.sources.map(s => s === 'autoscout24' ? 'AutoScout24' : s === 'marktplaats' ? 'Marktplaats' : s).join(' + ')}
+                        </span>
+                      )}
+                    </h3>
                     <div className="space-y-3 max-h-64 overflow-y-auto">
-                      {result.data.comparables.slice(0, 5).map((comp, index) => (
+                      {result.data.comparables.slice(0, 10).map((comp, index) => (
                         <div key={index} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
-                          <div>
-                            <p className="font-medium text-sm truncate max-w-[200px]">{comp.title}</p>
-                            <p className="text-xs text-slate-500">{formatNumber(comp.mileage_km)} km{comp.location && ` • ${comp.location}`}</p>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-sm truncate">{comp.title}</p>
+                            <p className="text-xs text-slate-500">
+                              {formatNumber(comp.mileage_km)} km
+                              {comp.location && ` • ${comp.location}`}
+                              <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${
+                                comp.source === 'marktplaats' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                              }`}>
+                                {comp.source === 'marktplaats' ? 'MP' : 'AS24'}
+                              </span>
+                            </p>
                           </div>
-                          <div className="text-right">
+                          <div className="text-right ml-3">
                             <p className="font-semibold">{formatCurrency(comp.price_eur)}</p>
                             {comp.listingUrl && (
                               <a href={comp.listingUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary-600 hover:underline">Bekijk</a>

@@ -73,7 +73,9 @@ Push naar main branch, Vercel deployed automatisch.
 ## Apify Actors
 
 - **mobile.de:** `3x1t~mobile-de-scraper-ppr`
-- **autoscout24.de:** `dtrungtin~autoscout24-scraper`
+- **autoscout24.de:** `3x1t~autoscout24-scraper-ppr`
+
+Beide actors zijn van dezelfde ontwikkelaar (3x1t).
 
 ## AI Model
 
@@ -91,8 +93,8 @@ Gebaseerd op 2026 Belastingdienst forfaitaire tabel. Zie `modal-app/constants.py
 - Moet zijn: `anthropic/claude-sonnet-4` (zonder datum suffix)
 
 ### AutoScout24 scraping faalt
-- Actor `dtrungtin~autoscout24-scraper` heeft residential proxy nodig
-- Proxy configuratie zit al in scrapers.py
+- Controleer of de Apify actor `3x1t~autoscout24-scraper-ppr` beschikbaar is in je account
+- Ga naar https://apify.com/3x1t/autoscout24-scraper-ppr en klik "Try for free"
 
 ### Apify fout
 - Controleer of de Modal secret `apify-secret` correct is ingesteld

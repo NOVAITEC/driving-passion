@@ -1,6 +1,6 @@
 """
 Dutch market search for comparable vehicles.
-Searches AutoScout24 NL for similar cars.
+Searches AutoScout24 NL and Marktplaats for similar cars.
 """
 
 import httpx
@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from typing import Optional
 import json
 import re
+import asyncio
 
 from scrapers import VehicleData
 from utils import extract_model_variant
+from constants import APIFY_ACTORS
 
 
 @dataclass
@@ -152,15 +154,210 @@ def parse_autoscout24_search_results(html: str) -> list[DutchComparable]:
     return comparables
 
 
-async def search_dutch_market(vehicle: VehicleData) -> list[DutchComparable]:
+def build_marktplaats_search_url(vehicle: VehicleData) -> str:
     """
-    Search the Dutch market for comparable vehicles.
+    Build Marktplaats search URL for comparable vehicles.
 
     Args:
         vehicle: The target vehicle to find comparables for
 
     Returns:
+        Search URL string for Marktplaats auto's
+    """
+    base_url = "https://www.marktplaats.nl/l/auto-s"
+
+    # Normalize make for URL (marktplaats uses different format)
+    make = vehicle.make.lower().replace(" ", "-")
+
+    # Handle model
+    base_model, variant = extract_model_variant(vehicle.model)
+    model = base_model.lower().replace(" ", "-")
+
+    # Build query parameters
+    params = []
+
+    # Search query with make and model
+    params.append(f"q={vehicle.make}+{base_model}")
+
+    # Year range: ±1 year
+    params.append(f"attributesByKey[]=constructionYear%3A{vehicle.year - 1}%7C{vehicle.year + 1}")
+
+    # Mileage range: ±20%
+    min_km = int(vehicle.mileage_km * 0.8)
+    max_km = int(vehicle.mileage_km * 1.2)
+    # Marktplaats uses mileage ranges like 0|50000, 50000|100000, etc.
+    # We'll use the closest ranges
+    params.append(f"attributesByKey[]=mileage%3A{min_km}%7C{max_km}")
+
+    # Fuel type mapping for Marktplaats
+    fuel_map = {
+        "petrol": "benzine",
+        "diesel": "diesel",
+        "electric": "elektrisch",
+        "hybrid": "hybride",
+        "lpg": "lpg",
+    }
+    if vehicle.fuel_type in fuel_map:
+        params.append(f"attributesByKey[]=fuel%3A{fuel_map[vehicle.fuel_type]}")
+
+    query = "&".join(params)
+    return f"{base_url}/?{query}"
+
+
+async def search_marktplaats_via_apify(
+    vehicle: VehicleData,
+    apify_token: str,
+    max_results: int = 20
+) -> list[DutchComparable]:
+    """
+    Search Marktplaats for comparable vehicles using Apify actor.
+
+    Args:
+        vehicle: The target vehicle to find comparables for
+        apify_token: Apify API token
+        max_results: Maximum number of results to return
+
+    Returns:
+        List of comparable vehicles from Marktplaats
+    """
+    actor_id = APIFY_ACTORS["marktplaats"]
+    search_url = build_marktplaats_search_url(vehicle)
+
+    async with httpx.AsyncClient() as client:
+        try:
+            # Start the actor run
+            run_response = await client.post(
+                f"https://api.apify.com/v2/acts/{actor_id}/runs",
+                headers={"Authorization": f"Bearer {apify_token}"},
+                json={
+                    "startUrls": [{"url": search_url}],
+                    "maxItems": max_results,
+                },
+                timeout=30,
+            )
+            run_response.raise_for_status()
+            run_data = run_response.json()
+            run_id = run_data["data"]["id"]
+
+            # Wait for completion (max 60 seconds)
+            for _ in range(30):
+                await asyncio.sleep(2)
+
+                status_response = await client.get(
+                    f"https://api.apify.com/v2/actor-runs/{run_id}",
+                    headers={"Authorization": f"Bearer {apify_token}"},
+                    timeout=10,
+                )
+                status_data = status_response.json()
+                status = status_data["data"]["status"]
+
+                if status == "SUCCEEDED":
+                    break
+                elif status in ["FAILED", "ABORTED", "TIMED-OUT"]:
+                    print(f"Marktplaats scraper failed with status: {status}")
+                    return []
+            else:
+                print("Marktplaats scraper timed out")
+                return []
+
+            # Get results
+            dataset_id = status_data["data"]["defaultDatasetId"]
+            results_response = await client.get(
+                f"https://api.apify.com/v2/datasets/{dataset_id}/items",
+                headers={"Authorization": f"Bearer {apify_token}"},
+                params={"format": "json"},
+                timeout=30,
+            )
+            results_response.raise_for_status()
+            results = results_response.json()
+
+            return parse_marktplaats_results(results)
+
+        except Exception as e:
+            print(f"Error searching Marktplaats via Apify: {e}")
+            return []
+
+
+def parse_marktplaats_results(results: list) -> list[DutchComparable]:
+    """
+    Parse Marktplaats results from Apify actor.
+
+    Args:
+        results: Raw results from Apify actor
+
+    Returns:
         List of comparable vehicles
+    """
+    comparables = []
+
+    for item in results:
+        try:
+            # Extract price - Marktplaats uses various formats
+            price_raw = item.get("price") or item.get("priceInfo", {}).get("priceCents", 0)
+            if isinstance(price_raw, str):
+                # Parse price string like "€ 15.000" or "15000"
+                price_clean = re.sub(r'[^\d]', '', price_raw)
+                price = int(price_clean) if price_clean else 0
+            elif isinstance(price_raw, dict):
+                price = int(price_raw.get("priceCents", 0)) // 100
+            else:
+                price = int(price_raw or 0)
+
+            # Skip if no valid price
+            if price <= 0 or price > 500000:
+                continue
+
+            # Extract mileage
+            mileage_raw = item.get("mileage") or item.get("attributes", {}).get("mileage", "0")
+            if isinstance(mileage_raw, str):
+                mileage_clean = re.sub(r'[^\d]', '', mileage_raw)
+                mileage = int(mileage_clean) if mileage_clean else 0
+            else:
+                mileage = int(mileage_raw or 0)
+
+            # Extract year
+            year_raw = item.get("year") or item.get("attributes", {}).get("constructionYear", "0")
+            if isinstance(year_raw, str):
+                year_match = re.search(r'\d{4}', year_raw)
+                year = int(year_match.group()) if year_match else 0
+            else:
+                year = int(year_raw or 0)
+
+            # Extract title and URL
+            title = item.get("title", "") or item.get("name", "")
+            listing_url = item.get("url", "") or item.get("link", "")
+
+            # Extract location
+            location = item.get("location", "") or item.get("sellerLocation", "")
+            if isinstance(location, dict):
+                location = location.get("cityName", "") or location.get("city", "")
+
+            comparables.append(DutchComparable(
+                price_eur=price,
+                mileage_km=mileage,
+                year=year,
+                title=title,
+                listing_url=listing_url,
+                source="marktplaats",
+                location=location,
+            ))
+
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"Error parsing Marktplaats item: {e}")
+            continue
+
+    return comparables
+
+
+async def search_autoscout24_nl(vehicle: VehicleData) -> list[DutchComparable]:
+    """
+    Search AutoScout24 NL for comparable vehicles.
+
+    Args:
+        vehicle: The target vehicle to find comparables for
+
+    Returns:
+        List of comparable vehicles from AutoScout24 NL
     """
     search_url = build_autoscout24_search_url(vehicle)
 
@@ -181,8 +378,63 @@ async def search_dutch_market(vehicle: VehicleData) -> list[DutchComparable]:
             return parse_autoscout24_search_results(response.text)
 
         except Exception as e:
-            print(f"Error searching Dutch market: {e}")
+            print(f"Error searching AutoScout24 NL: {e}")
             return []
+
+
+async def search_dutch_market(
+    vehicle: VehicleData,
+    apify_token: Optional[str] = None
+) -> list[DutchComparable]:
+    """
+    Search the Dutch market for comparable vehicles.
+    Combines results from AutoScout24 NL and Marktplaats.
+
+    Args:
+        vehicle: The target vehicle to find comparables for
+        apify_token: Apify API token for Marktplaats search (optional)
+
+    Returns:
+        List of comparable vehicles from multiple sources
+    """
+    all_comparables = []
+
+    # Search AutoScout24 NL (always)
+    autoscout_task = search_autoscout24_nl(vehicle)
+
+    # Search Marktplaats (if token available)
+    if apify_token:
+        marktplaats_task = search_marktplaats_via_apify(vehicle, apify_token)
+        autoscout_results, marktplaats_results = await asyncio.gather(
+            autoscout_task,
+            marktplaats_task,
+            return_exceptions=True
+        )
+
+        # Handle AutoScout24 results
+        if isinstance(autoscout_results, list):
+            all_comparables.extend(autoscout_results)
+            print(f"Found {len(autoscout_results)} results from AutoScout24 NL")
+        else:
+            print(f"AutoScout24 search failed: {autoscout_results}")
+
+        # Handle Marktplaats results
+        if isinstance(marktplaats_results, list):
+            all_comparables.extend(marktplaats_results)
+            print(f"Found {len(marktplaats_results)} results from Marktplaats")
+        else:
+            print(f"Marktplaats search failed: {marktplaats_results}")
+    else:
+        # Only AutoScout24 if no Apify token
+        autoscout_results = await autoscout_task
+        if isinstance(autoscout_results, list):
+            all_comparables.extend(autoscout_results)
+            print(f"Found {len(autoscout_results)} results from AutoScout24 NL")
+
+    # Sort by price
+    all_comparables.sort(key=lambda x: x.price_eur)
+
+    return all_comparables
 
 
 def get_market_stats(comparables: list[DutchComparable]) -> MarketStats:
