@@ -31,10 +31,6 @@ De backend draait op **Modal** (modal.com). Dit is de primaire en enige actieve 
 - Draait op Vercel
 - Roept de Modal API aan
 
-### Oude n8n Workflows (NIET MEER IN GEBRUIK)
-
-De `workflows/` directory bevat oude n8n workflow exports. Deze worden NIET meer gebruikt. Alle logica is nu in de Modal app.
-
 ## Secrets & Credentials
 
 Secrets worden beheerd via Modal:

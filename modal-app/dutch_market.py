@@ -120,6 +120,7 @@ def parse_autoscout24_search_results(html: str) -> list[DutchComparable]:
     match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
 
     if not match:
+        print("AutoScout24 NL: No __NEXT_DATA__ found in HTML")
         return comparables
 
     try:
@@ -128,11 +129,51 @@ def parse_autoscout24_search_results(html: str) -> list[DutchComparable]:
 
         for listing in listings:
             try:
-                price = int(listing.get("price", {}).get("value", 0) or 0)
-                mileage = int(listing.get("mileage", 0) or 0)
-                year = int(listing.get("year", 0) or 0)
-                title = listing.get("title", "")
+                # Price is in tracking.price or parse from price.priceFormatted
+                tracking = listing.get("tracking", {})
+                price = 0
+                if tracking.get("price"):
+                    price = int(tracking["price"])
+                else:
+                    # Fallback: parse from priceFormatted like "€ 29.750"
+                    price_str = listing.get("price", {}).get("priceFormatted", "")
+                    if price_str:
+                        price_clean = re.sub(r'[^\d]', '', price_str)
+                        price = int(price_clean) if price_clean else 0
+
+                # Mileage is in tracking.mileage or vehicle.mileageInKm
+                mileage = 0
+                if tracking.get("mileage"):
+                    mileage = int(tracking["mileage"])
+                else:
+                    mileage_str = listing.get("vehicle", {}).get("mileageInKm", "0")
+                    mileage_clean = re.sub(r'[^\d]', '', str(mileage_str))
+                    mileage = int(mileage_clean) if mileage_clean else 0
+
+                # Year is in tracking.firstRegistration like "06-2022"
+                year = 0
+                first_reg = tracking.get("firstRegistration", "")
+                if first_reg:
+                    year_match = re.search(r'(\d{4})', first_reg)
+                    if year_match:
+                        year = int(year_match.group(1))
+
+                # Build title from vehicle info
+                vehicle_info = listing.get("vehicle", {})
+                make = vehicle_info.get("make", "")
+                model = vehicle_info.get("model", "")
+                variant = vehicle_info.get("modelVersionInput", "")
+                title = f"{make} {model} {variant}".strip()
+
+                # Get listing ID and URL
                 listing_id = listing.get("id", "")
+                listing_url = listing.get("url", "")
+                if listing_url and not listing_url.startswith("http"):
+                    listing_url = f"https://www.autoscout24.nl{listing_url}"
+                elif listing_id and not listing_url:
+                    listing_url = f"https://www.autoscout24.nl/aanbod/{listing_id}"
+
+                # Location
                 location = listing.get("location", {}).get("city", "")
 
                 if price > 0:
@@ -141,15 +182,16 @@ def parse_autoscout24_search_results(html: str) -> list[DutchComparable]:
                         mileage_km=mileage,
                         year=year,
                         title=title,
-                        listing_url=f"https://www.autoscout24.nl/aanbod/{listing_id}" if listing_id else "",
+                        listing_url=listing_url,
                         source="autoscout24",
                         location=location,
                     ))
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"Error parsing AutoScout24 NL listing: {e}")
                 continue
 
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        print(f"AutoScout24 NL: JSON decode error: {e}")
 
     return comparables
 
@@ -158,56 +200,49 @@ def build_marktplaats_search_url(vehicle: VehicleData) -> str:
     """
     Build Marktplaats search URL for comparable vehicles.
 
+    Uses Marktplaats brand subcategory for more precise results.
+
     Args:
         vehicle: The target vehicle to find comparables for
 
     Returns:
         Search URL string for Marktplaats auto's
     """
-    base_url = "https://www.marktplaats.nl/l/auto-s"
+    # Marktplaats uses brand as subcategory: /l/auto-s/bmw/
+    # Normalize make for URL path
+    make_url = vehicle.make.lower().replace(" ", "-").replace("ë", "e").replace("ö", "o")
 
-    # Normalize make for URL (marktplaats uses different format)
-    make = vehicle.make.lower().replace(" ", "-")
+    # Handle special brand names
+    brand_mapping = {
+        "mercedes-benz": "mercedes-benz",
+        "volkswagen": "volkswagen",
+        "vw": "volkswagen",
+        "alfa romeo": "alfa-romeo",
+        "land rover": "land-rover",
+    }
+    make_url = brand_mapping.get(make_url, make_url)
 
-    # Handle model
+    base_url = f"https://www.marktplaats.nl/l/auto-s/{make_url}/"
+
+    # Get base model for search query - use full model for better matching
     base_model, variant = extract_model_variant(vehicle.model)
-    model = base_model.lower().replace(" ", "-")
 
     # Build query parameters
     params = []
 
-    # Search query with make and model
-    params.append(f"q={vehicle.make}+{base_model}")
-
-    # Year range: ±1 year
-    params.append(f"attributesByKey[]=constructionYear%3A{vehicle.year - 1}%7C{vehicle.year + 1}")
-
-    # Mileage range: ±20%
-    min_km = int(vehicle.mileage_km * 0.8)
-    max_km = int(vehicle.mileage_km * 1.2)
-    # Marktplaats uses mileage ranges like 0|50000, 50000|100000, etc.
-    # We'll use the closest ranges
-    params.append(f"attributesByKey[]=mileage%3A{min_km}%7C{max_km}")
-
-    # Fuel type mapping for Marktplaats
-    fuel_map = {
-        "petrol": "benzine",
-        "diesel": "diesel",
-        "electric": "elektrisch",
-        "hybrid": "hybride",
-        "lpg": "lpg",
-    }
-    if vehicle.fuel_type in fuel_map:
-        params.append(f"attributesByKey[]=fuel%3A{fuel_map[vehicle.fuel_type]}")
+    # Search query - include make + model for precision since Marktplaats
+    # search can be imprecise with just model name
+    search_query = f"{vehicle.make} {base_model}"
+    params.append(f"q={search_query.replace(' ', '+')}")
 
     query = "&".join(params)
-    return f"{base_url}/?{query}"
+    return f"{base_url}?{query}"
 
 
 async def search_marktplaats_via_apify(
     vehicle: VehicleData,
     apify_token: str,
-    max_results: int = 20
+    max_results: int = 5
 ) -> list[DutchComparable]:
     """
     Search Marktplaats for comparable vehicles using Apify actor.
@@ -226,12 +261,13 @@ async def search_marktplaats_via_apify(
     async with httpx.AsyncClient() as client:
         try:
             # Start the actor run
+            # Note: ivanvs~marktplaats-scraper expects "urls" with objects and "maxRecords"
             run_response = await client.post(
                 f"https://api.apify.com/v2/acts/{actor_id}/runs",
-                headers={"Authorization": f"Bearer {apify_token}"},
+                params={"token": apify_token},
                 json={
-                    "startUrls": [{"url": search_url}],
-                    "maxItems": max_results,
+                    "maxRecords": max_results,
+                    "urls": [{"url": search_url}],
                 },
                 timeout=30,
             )
@@ -239,13 +275,13 @@ async def search_marktplaats_via_apify(
             run_data = run_response.json()
             run_id = run_data["data"]["id"]
 
-            # Wait for completion (max 60 seconds)
-            for _ in range(30):
+            # Wait for completion (max 90 seconds - Marktplaats actor can be slow)
+            for _ in range(45):
                 await asyncio.sleep(2)
 
                 status_response = await client.get(
                     f"https://api.apify.com/v2/actor-runs/{run_id}",
-                    headers={"Authorization": f"Bearer {apify_token}"},
+                    params={"token": apify_token},
                     timeout=10,
                 )
                 status_data = status_response.json()
@@ -264,14 +300,34 @@ async def search_marktplaats_via_apify(
             dataset_id = status_data["data"]["defaultDatasetId"]
             results_response = await client.get(
                 f"https://api.apify.com/v2/datasets/{dataset_id}/items",
-                headers={"Authorization": f"Bearer {apify_token}"},
-                params={"format": "json"},
+                params={"token": apify_token, "format": "json"},
                 timeout=30,
             )
             results_response.raise_for_status()
             results = results_response.json()
 
-            return parse_marktplaats_results(results)
+            # Parse and filter results to match vehicle make/model
+            comparables = parse_marktplaats_results(results)
+
+            # Filter by make (case insensitive)
+            make_lower = vehicle.make.lower()
+            # Get base model for matching
+            base_model, _ = extract_model_variant(vehicle.model)
+            model_lower = base_model.lower()
+
+            filtered = []
+            for comp in comparables:
+                title_lower = comp.title.lower()
+                # Must contain the make
+                if make_lower not in title_lower:
+                    continue
+                # Should contain model or model number (e.g., "320" from "320i")
+                model_num = ''.join(c for c in model_lower if c.isdigit())
+                if model_lower in title_lower or (model_num and model_num in title_lower):
+                    filtered.append(comp)
+
+            print(f"Marktplaats: {len(comparables)} results, {len(filtered)} after filtering for {vehicle.make} {base_model}")
+            return filtered
 
         except Exception as e:
             print(f"Error searching Marktplaats via Apify: {e}")
@@ -280,7 +336,7 @@ async def search_marktplaats_via_apify(
 
 def parse_marktplaats_results(results: list) -> list[DutchComparable]:
     """
-    Parse Marktplaats results from Apify actor.
+    Parse Marktplaats results from ivanvs~marktplaats-scraper Apify actor.
 
     Args:
         results: Raw results from Apify actor
@@ -292,31 +348,36 @@ def parse_marktplaats_results(results: list) -> list[DutchComparable]:
 
     for item in results:
         try:
-            # Extract price - Marktplaats uses various formats
-            price_raw = item.get("price") or item.get("priceInfo", {}).get("priceCents", 0)
-            if isinstance(price_raw, str):
-                # Parse price string like "€ 15.000" or "15000"
-                price_clean = re.sub(r'[^\d]', '', price_raw)
-                price = int(price_clean) if price_clean else 0
-            elif isinstance(price_raw, dict):
-                price = int(price_raw.get("priceCents", 0)) // 100
+            # Skip non-car ads
+            if not item.get("isCarAd", False):
+                continue
+
+            # Extract price from price.priceCents (in cents, divide by 100)
+            price_obj = item.get("price", {})
+            if isinstance(price_obj, dict):
+                price_cents = price_obj.get("priceCents", 0)
+                price = int(price_cents) // 100 if price_cents else 0
             else:
-                price = int(price_raw or 0)
+                # Fallback for other formats
+                price_clean = re.sub(r'[^\d]', '', str(price_obj))
+                price = int(price_clean) if price_clean else 0
 
             # Skip if no valid price
             if price <= 0 or price > 500000:
                 continue
 
-            # Extract mileage
-            mileage_raw = item.get("mileage") or item.get("attributes", {}).get("mileage", "0")
+            # Extract mileage from attributes.mileage (string like "216.000")
+            attrs = item.get("attributes", {})
+            mileage_raw = attrs.get("mileage", "0")
             if isinstance(mileage_raw, str):
+                # Remove dots and other non-digits (e.g., "216.000" -> 216000)
                 mileage_clean = re.sub(r'[^\d]', '', mileage_raw)
                 mileage = int(mileage_clean) if mileage_clean else 0
             else:
                 mileage = int(mileage_raw or 0)
 
-            # Extract year
-            year_raw = item.get("year") or item.get("attributes", {}).get("constructionYear", "0")
+            # Extract year from constructionYear at top level
+            year_raw = item.get("constructionYear") or attrs.get("constructionYear", "0")
             if isinstance(year_raw, str):
                 year_match = re.search(r'\d{4}', year_raw)
                 year = int(year_match.group()) if year_match else 0
@@ -324,13 +385,18 @@ def parse_marktplaats_results(results: list) -> list[DutchComparable]:
                 year = int(year_raw or 0)
 
             # Extract title and URL
-            title = item.get("title", "") or item.get("name", "")
-            listing_url = item.get("url", "") or item.get("link", "")
+            title = item.get("title", "")
+            listing_url = item.get("url", "")
 
-            # Extract location
-            location = item.get("location", "") or item.get("sellerLocation", "")
-            if isinstance(location, dict):
-                location = location.get("cityName", "") or location.get("city", "")
+            # Build title from brand/model if not available
+            if not title:
+                brand = item.get("brand", "")
+                model = item.get("model", "")
+                title = f"{brand} {model}".strip()
+
+            # Location is not directly available in seller info,
+            # but we can try to extract from description or leave empty
+            location = ""
 
             comparables.append(DutchComparable(
                 price_eur=price,
