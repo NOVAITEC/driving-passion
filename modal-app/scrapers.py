@@ -1,0 +1,376 @@
+"""
+Vehicle scrapers for German car listing sites.
+Uses Apify actors for mobile.de and AutoScout24.
+"""
+
+import httpx
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, Any
+import asyncio
+
+from constants import APIFY_ACTORS
+from utils import normalize_fuel_type, normalize_transmission
+
+
+@dataclass
+class VehicleData:
+    """Parsed vehicle data from a listing."""
+    make: str
+    model: str
+    year: int
+    mileage_km: int
+    price_eur: int
+    fuel_type: str
+    transmission: str
+    co2_gkm: int
+    first_registration_date: datetime
+    listing_url: str = ""
+    source: str = ""
+    title: str = ""
+    features: list = None
+    attributes: dict = None
+
+    def __post_init__(self):
+        if self.features is None:
+            self.features = []
+        if self.attributes is None:
+            self.attributes = {}
+
+
+@dataclass
+class ScrapeResult:
+    """Result of a scrape operation."""
+    success: bool
+    data: Optional[VehicleData] = None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+    error_details: Optional[str] = None
+
+
+def detect_source(url: str) -> str:
+    """Detect the source website from URL."""
+    if "mobile.de" in url:
+        return "mobile.de"
+    if "autoscout24" in url:
+        return "autoscout24"
+    return "unknown"
+
+
+def extract_listing_id(url: str, source: str) -> Optional[str]:
+    """Extract listing ID from URL."""
+    if source == "mobile.de":
+        # https://suchen.mobile.de/fahrzeuge/details.html?id=446136631
+        if "id=" in url:
+            return url.split("id=")[1].split("&")[0]
+    elif source == "autoscout24":
+        # https://www.autoscout24.de/angebote/xxx-xxx-xxx-guid
+        parts = url.rstrip("/").split("/")
+        if parts:
+            return parts[-1]
+    return None
+
+
+async def run_apify_actor(
+    actor_id: str,
+    input_data: dict,
+    token: str,
+    timeout: int = 120
+) -> dict:
+    """
+    Run an Apify actor and wait for results.
+
+    Args:
+        actor_id: Apify actor ID
+        input_data: Input for the actor
+        token: Apify API token
+        timeout: Timeout in seconds
+
+    Returns:
+        Actor run results
+    """
+    async with httpx.AsyncClient() as client:
+        # Start the actor run
+        start_url = f"https://api.apify.com/v2/acts/{actor_id}/runs"
+
+        response = await client.post(
+            start_url,
+            params={"token": token},
+            json=input_data,
+            timeout=30,
+        )
+        response.raise_for_status()
+        run_data = response.json()
+        run_id = run_data["data"]["id"]
+
+        # Poll for completion
+        status_url = f"https://api.apify.com/v2/actor-runs/{run_id}"
+        start_time = asyncio.get_event_loop().time()
+
+        while True:
+            if asyncio.get_event_loop().time() - start_time > timeout:
+                raise TimeoutError(f"Actor run timed out after {timeout}s")
+
+            response = await client.get(
+                status_url,
+                params={"token": token},
+                timeout=10,
+            )
+            response.raise_for_status()
+            status_data = response.json()
+            status = status_data["data"]["status"]
+
+            if status == "SUCCEEDED":
+                break
+            elif status in ["FAILED", "ABORTED", "TIMED-OUT"]:
+                raise Exception(f"Actor run failed with status: {status}")
+
+            await asyncio.sleep(2)
+
+        # Get results from default dataset
+        dataset_id = status_data["data"]["defaultDatasetId"]
+        results_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items"
+
+        response = await client.get(
+            results_url,
+            params={"token": token},
+            timeout=30,
+        )
+        response.raise_for_status()
+
+        return response.json()
+
+
+def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
+    """Parse mobile.de scraper result into VehicleData."""
+    # Extract attributes
+    attrs = item.get("attributes", {})
+
+    # Get make and model
+    make = attrs.get("make", item.get("make", "Unknown"))
+    model = attrs.get("model", item.get("model", "Unknown"))
+
+    # Get year from first registration
+    first_reg_str = attrs.get("firstRegistration", "")
+    if first_reg_str:
+        try:
+            # Format: "04/2014" or "2014-04"
+            if "/" in first_reg_str:
+                month, year = first_reg_str.split("/")
+                first_reg = datetime(int(year), int(month), 1)
+            else:
+                first_reg = datetime.fromisoformat(first_reg_str + "-01")
+        except:
+            first_reg = datetime.now()
+    else:
+        first_reg = datetime.now()
+
+    year = first_reg.year
+
+    # Get mileage
+    mileage_str = attrs.get("mileage", "0")
+    mileage = int("".join(filter(str.isdigit, str(mileage_str))) or 0)
+
+    # Get price
+    price_str = str(item.get("price", "0"))
+    price = int("".join(filter(str.isdigit, price_str)) or 0)
+
+    # Get fuel type and transmission
+    fuel_type = normalize_fuel_type(attrs.get("fuelType", "petrol"))
+    transmission = normalize_transmission(attrs.get("transmission", "automatic"))
+
+    # Get CO2 - this is often missing, estimate if needed
+    co2_str = attrs.get("co2Emission", "")
+    if co2_str:
+        co2 = int("".join(filter(str.isdigit, str(co2_str))) or 150)
+    else:
+        # Estimate based on fuel type and era
+        co2 = 150 if fuel_type == "petrol" else 130
+
+    return VehicleData(
+        make=make,
+        model=model,
+        year=year,
+        mileage_km=mileage,
+        price_eur=price,
+        fuel_type=fuel_type,
+        transmission=transmission,
+        co2_gkm=co2,
+        first_registration_date=first_reg,
+        listing_url=url,
+        source="mobile.de",
+        title=item.get("title", f"{make} {model}"),
+        features=item.get("features", []),
+        attributes=attrs,
+    )
+
+
+def parse_autoscout24_result(item: dict, url: str) -> VehicleData:
+    """Parse AutoScout24 scraper result into VehicleData."""
+    # Similar structure to mobile.de
+    attrs = item.get("vehicleDetails", item.get("attributes", {}))
+
+    make = item.get("make", attrs.get("make", "Unknown"))
+    model = item.get("model", attrs.get("model", "Unknown"))
+
+    # Get first registration
+    first_reg_str = attrs.get("firstRegistration", item.get("firstRegistration", ""))
+    if first_reg_str:
+        try:
+            if "/" in first_reg_str:
+                month, year = first_reg_str.split("/")
+                first_reg = datetime(int(year), int(month), 1)
+            else:
+                parts = first_reg_str.split("-")
+                if len(parts) >= 2:
+                    first_reg = datetime(int(parts[0]), int(parts[1]), 1)
+                else:
+                    first_reg = datetime(int(first_reg_str), 1, 1)
+        except:
+            first_reg = datetime.now()
+    else:
+        first_reg = datetime.now()
+
+    year = first_reg.year
+
+    mileage_str = str(item.get("mileage", attrs.get("mileage", "0")))
+    mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
+
+    price_str = str(item.get("price", attrs.get("price", "0")))
+    price = int("".join(filter(str.isdigit, price_str)) or 0)
+
+    fuel_type = normalize_fuel_type(item.get("fuelType", attrs.get("fuelType", "petrol")))
+    transmission = normalize_transmission(item.get("transmission", attrs.get("transmission", "automatic")))
+
+    co2_str = str(item.get("co2Emission", attrs.get("co2Emission", "")))
+    if co2_str:
+        co2 = int("".join(filter(str.isdigit, co2_str)) or 150)
+    else:
+        co2 = 150 if fuel_type == "petrol" else 130
+
+    return VehicleData(
+        make=make,
+        model=model,
+        year=year,
+        mileage_km=mileage,
+        price_eur=price,
+        fuel_type=fuel_type,
+        transmission=transmission,
+        co2_gkm=co2,
+        first_registration_date=first_reg,
+        listing_url=url,
+        source="autoscout24",
+        title=item.get("title", f"{make} {model}"),
+        features=item.get("features", []),
+        attributes=attrs,
+    )
+
+
+async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
+    """
+    Scrape a vehicle listing.
+
+    Args:
+        url: URL of the listing
+        apify_token: Apify API token
+
+    Returns:
+        ScrapeResult with vehicle data or error
+    """
+    source = detect_source(url)
+
+    if source == "unknown":
+        return ScrapeResult(
+            success=False,
+            error_type="INVALID_URL",
+            error_message="URL not supported. Use mobile.de or AutoScout24.",
+        )
+
+    listing_id = extract_listing_id(url, source)
+
+    if not listing_id:
+        return ScrapeResult(
+            success=False,
+            error_type="INVALID_URL",
+            error_message="Could not extract listing ID from URL.",
+        )
+
+    try:
+        if source == "mobile.de":
+            actor_id = APIFY_ACTORS["mobile_de"]
+            input_data = {
+                "startUrls": [{"url": url}],
+                "maxItems": 1,
+            }
+            results = await run_apify_actor(actor_id, input_data, apify_token)
+
+            if not results:
+                return ScrapeResult(
+                    success=False,
+                    error_type="LISTING_OFFLINE",
+                    error_message="Listing not found or no longer available.",
+                )
+
+            vehicle = parse_mobile_de_result(results[0], url)
+
+        else:  # autoscout24
+            actor_id = APIFY_ACTORS["autoscout24"]
+            input_data = {
+                "startUrls": [{"url": url}],
+                "maxItems": 1,
+            }
+            results = await run_apify_actor(actor_id, input_data, apify_token)
+
+            if not results:
+                return ScrapeResult(
+                    success=False,
+                    error_type="LISTING_OFFLINE",
+                    error_message="Listing not found or no longer available.",
+                )
+
+            vehicle = parse_autoscout24_result(results[0], url)
+
+        # Validate we got real data
+        if vehicle.price_eur == 0:
+            return ScrapeResult(
+                success=False,
+                error_type="LISTING_SOLD",
+                error_message="Listing appears to be sold or price not available.",
+            )
+
+        return ScrapeResult(success=True, data=vehicle)
+
+    except TimeoutError as e:
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_TIMEOUT",
+            error_message="Scraper timed out. Please try again.",
+            error_details=str(e),
+        )
+    except Exception as e:
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_ERROR",
+            error_message="Failed to scrape listing.",
+            error_details=str(e),
+        )
+
+
+def vehicle_to_dict(vehicle: VehicleData) -> dict:
+    """Convert VehicleData to dictionary for JSON serialization."""
+    return {
+        "make": vehicle.make,
+        "model": vehicle.model,
+        "year": vehicle.year,
+        "mileage_km": vehicle.mileage_km,
+        "price_eur": vehicle.price_eur,
+        "fuelType": vehicle.fuel_type,
+        "transmission": vehicle.transmission,
+        "co2_gkm": vehicle.co2_gkm,
+        "firstRegistrationDate": vehicle.first_registration_date.isoformat(),
+        "listingUrl": vehicle.listing_url,
+        "source": vehicle.source,
+        "title": vehicle.title,
+        "features": vehicle.features,
+        "attributes": vehicle.attributes,
+    }
