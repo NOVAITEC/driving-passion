@@ -144,49 +144,167 @@ async def run_apify_actor(
 
 def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
     """Parse mobile.de scraper result into VehicleData."""
-    # Extract attributes
+    # The 3x1t~mobile-de-scraper-ppr actor returns attributes with keys like
+    # "First Registration", "Mileage", "Fuel" (with spaces and capitals)
+
+    # Extract attributes dict if present
     attrs = item.get("attributes", {})
+    if isinstance(attrs, str):
+        attrs = {}
 
-    # Get make and model
-    make = attrs.get("make", item.get("make", "Unknown"))
-    model = attrs.get("model", item.get("model", "Unknown"))
+    # Helper function to get value from attrs with flexible key matching
+    def get_attr(keys):
+        """Try multiple key variations to find a value in attrs."""
+        for key in keys:
+            if key in attrs:
+                return attrs[key]
+            # Try lowercase
+            key_lower = key.lower()
+            for attr_key, attr_val in attrs.items():
+                if attr_key.lower() == key_lower:
+                    return attr_val
+        return None
 
-    # Get year from first registration
-    first_reg_str = attrs.get("firstRegistration", "")
+    # Parse title first - it contains make and model
+    title = item.get("title", "") or item.get("name", "") or ""
+
+    # Extract make/model from title like "Mercedes-Benz C 180 Cabrio Verdeck..."
+    make = "Unknown"
+    model = "Unknown"
+    if title:
+        # Common German car brands
+        brands = ["Mercedes-Benz", "BMW", "Audi", "Volkswagen", "VW", "Porsche",
+                  "Ford", "Opel", "Skoda", "Seat", "Renault", "Peugeot", "Citroën",
+                  "Fiat", "Alfa Romeo", "Volvo", "Toyota", "Honda", "Mazda",
+                  "Nissan", "Hyundai", "Kia", "Lexus", "Mini", "Land Rover",
+                  "Jaguar", "Jeep", "Tesla", "Chevrolet", "Dodge"]
+        for brand in brands:
+            if title.lower().startswith(brand.lower()):
+                make = brand
+                # Model is what comes after the brand
+                model_part = title[len(brand):].strip()
+                # Take first 2-3 words as model
+                model_words = model_part.split()[:3]
+                model = " ".join(model_words)
+                break
+
+        if make == "Unknown":
+            # Fallback: first word is make, next words are model
+            parts = title.split()
+            if len(parts) >= 1:
+                make = parts[0]
+            if len(parts) >= 2:
+                model = " ".join(parts[1:3])
+
+    # Override with explicit make/model if available
+    if item.get("brand"):
+        make = item.get("brand")
+    if item.get("model"):
+        model = item.get("model")
+
+    # Get first registration from attributes - key is "First Registration"
+    first_reg_str = (
+        get_attr(["First Registration", "firstRegistration", "registration"]) or
+        item.get("firstRegistration") or
+        ""
+    )
+
+    first_reg = datetime.now()
+    year = datetime.now().year
+
     if first_reg_str:
+        first_reg_str = str(first_reg_str).strip()
         try:
-            # Format: "04/2014" or "2014-04"
             if "/" in first_reg_str:
-                month, year = first_reg_str.split("/")
-                first_reg = datetime(int(year), int(month), 1)
-            else:
-                first_reg = datetime.fromisoformat(first_reg_str + "-01")
+                # Format: "09/2016"
+                parts = first_reg_str.split("/")
+                if len(parts) == 2:
+                    if len(parts[0]) == 4:  # YYYY/MM
+                        year = int(parts[0])
+                        month = int(parts[1])
+                    else:  # MM/YYYY
+                        month = int(parts[0])
+                        year = int(parts[1])
+                    first_reg = datetime(year, month, 1)
+            elif "-" in first_reg_str:
+                parts = first_reg_str.split("-")
+                year = int(parts[0])
+                month = int(parts[1]) if len(parts) > 1 else 1
+                first_reg = datetime(year, month, 1)
         except:
-            first_reg = datetime.now()
-    else:
-        first_reg = datetime.now()
+            pass
 
-    year = first_reg.year
-
-    # Get mileage
-    mileage_str = attrs.get("mileage", "0")
+    # Get mileage from attributes - key is "Mileage"
+    mileage_str = (
+        get_attr(["Mileage", "mileage", "km"]) or
+        item.get("mileage") or
+        "0"
+    )
+    # Parse "75,948 km" -> 75948
     mileage = int("".join(filter(str.isdigit, str(mileage_str))) or 0)
 
-    # Get price
-    price_str = str(item.get("price", "0"))
-    price = int("".join(filter(str.isdigit, price_str)) or 0)
+    # Get price - this one is tricky, the actor seems to have issues
+    # Try to get from item.price first, but validate it
+    price_raw = item.get("price")
 
-    # Get fuel type and transmission
-    fuel_type = normalize_fuel_type(attrs.get("fuelType", "petrol"))
-    transmission = normalize_transmission(attrs.get("transmission", "automatic"))
+    # The price field might be duplicated or corrupted
+    # A normal car price is 4-6 digits (1000 - 999999 EUR)
+    price = 0
+    if price_raw is not None:
+        price_str = str(price_raw)
+        # Extract all digits
+        digits = "".join(filter(str.isdigit, price_str))
 
-    # Get CO2 - this is often missing, estimate if needed
-    co2_str = attrs.get("co2Emission", "")
-    if co2_str:
-        co2 = int("".join(filter(str.isdigit, str(co2_str))) or 150)
-    else:
-        # Estimate based on fuel type and era
-        co2 = 150 if fuel_type == "petrol" else 130
+        if digits:
+            # Check if digits are duplicated (e.g., "2360023600" = "23600" twice)
+            if len(digits) >= 8:
+                half_len = len(digits) // 2
+                first_half = digits[:half_len]
+                second_half = digits[half_len:half_len*2]
+                if first_half == second_half:
+                    # Duplicated! Use just the first half
+                    price = int(first_half)
+                else:
+                    # Not duplicated, take first 5-6 digits
+                    price = int(digits[:min(6, len(digits))])
+            else:
+                price = int(digits)
+
+    # Sanity check
+    if price < 100 or price > 500000:
+        price = 0  # Will trigger error downstream
+
+    # Get fuel type from attributes - key is "Fuel"
+    fuel_raw = (
+        get_attr(["Fuel", "fuel", "fuelType", "Drive type"]) or
+        item.get("fuel") or
+        "petrol"
+    )
+    fuel_type = normalize_fuel_type(str(fuel_raw))
+
+    # Get transmission from attributes - key is "Transmission"
+    trans_raw = (
+        get_attr(["Transmission", "transmission", "gearbox"]) or
+        item.get("transmission") or
+        "automatic"
+    )
+    transmission = normalize_transmission(str(trans_raw))
+
+    # Get CO2 - often not available, estimate based on engine
+    co2 = 150  # Default
+    power_str = get_attr(["Power", "power", "kW"])
+    if power_str:
+        # Parse "115 kW (156 hp)" -> estimate CO2 based on power
+        kw_match = "".join(filter(str.isdigit, str(power_str).split("kW")[0]))
+        if kw_match:
+            kw = int(kw_match)
+            # Rough estimate: ~1.2-1.5 g/km per kW for petrol
+            if fuel_type == "diesel":
+                co2 = min(250, max(100, int(kw * 1.0)))
+            elif fuel_type == "electric":
+                co2 = 0
+            else:
+                co2 = min(300, max(100, int(kw * 1.3)))
 
     return VehicleData(
         make=make,
@@ -200,8 +318,8 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
         first_registration_date=first_reg,
         listing_url=url,
         source="mobile.de",
-        title=item.get("title", f"{make} {model}"),
-        features=item.get("features", []),
+        title=title or f"{make} {model}",
+        features=item.get("features", item.get("equipment", [])),
         attributes=attrs,
     )
 
