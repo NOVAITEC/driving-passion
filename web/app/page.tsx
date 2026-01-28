@@ -43,6 +43,16 @@ interface ResultData {
   recommendation: 'GO' | 'CONSIDER' | 'NO_GO'
 }
 
+interface PriceBreakdown {
+  baseValue: number
+  mileageAdjustment: number
+  optionsAdjustment: number
+  conditionAdjustment: number
+  marketAdjustment: number
+  calculatedTotal: number
+  explanation: string
+}
+
 interface AIValuation {
   estimatedRetailPrice: number
   estimatedQuickSalePrice: number
@@ -50,6 +60,7 @@ interface AIValuation {
   reasoning?: string
   pros?: string[]
   cons?: string[]
+  priceBreakdown?: PriceBreakdown
 }
 
 interface ComparableVehicle {
@@ -103,7 +114,7 @@ export default function Home() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!url.trim()) {
-      setError('Vul een URL in van mobile.de of AutoScout24')
+      setError('Vul een URL in van mobile.de of autoscout24.de')
       return
     }
 
@@ -186,11 +197,11 @@ export default function Home() {
                   id="url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://www.mobile.de/..."
+                  placeholder="https://www.mobile.de/... of https://www.autoscout24.de/..."
                   className="input-field"
                   disabled={isLoading}
                 />
-                <p className="mt-2 text-sm text-slate-500">Ondersteund: mobile.de en AutoScout24 Duitsland</p>
+                <p className="mt-2 text-sm text-slate-500">Ondersteund: mobile.de en autoscout24.de</p>
               </div>
               <button type="submit" disabled={isLoading || !url.trim()} className="btn-primary">
                 {isLoading ? 'Analyseren...' : 'Analyseer Advertentie'}
@@ -230,14 +241,23 @@ export default function Home() {
             )}
 
             <div className="mt-8 pt-6 border-t border-slate-200">
-              <h3 className="text-sm font-medium text-slate-700 mb-3">Voorbeeld URL:</h3>
-              <button
-                type="button"
-                onClick={() => setUrl('https://suchen.mobile.de/fahrzeuge/details.html?id=446136631')}
-                className="text-sm text-primary-600 hover:text-primary-700 underline"
-              >
-                mobile.de - Test advertentie
-              </button>
+              <h3 className="text-sm font-medium text-slate-700 mb-3">Voorbeeld URL's:</h3>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => setUrl('https://suchen.mobile.de/fahrzeuge/details.html?id=446136631')}
+                  className="text-sm text-primary-600 hover:text-primary-700 underline text-left"
+                >
+                  mobile.de - Test advertentie
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUrl('https://www.autoscout24.de/angebote/')}
+                  className="text-sm text-primary-600 hover:text-primary-700 underline text-left"
+                >
+                  autoscout24.de - Ga naar AutoScout24 om een advertentie te vinden
+                </button>
+              </div>
             </div>
           </div>
 
@@ -305,6 +325,89 @@ export default function Home() {
                     </div>
                   )}
                 </div>
+
+                {result.data.aiValuation?.priceBreakdown && (
+                  <div className="card">
+                    <h3 className="font-semibold text-lg mb-4">💰 Prijsopbouw</h3>
+                    <div className="space-y-3 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Basiswaarde</span>
+                        <span className="font-medium">{formatCurrency(result.data.aiValuation.priceBreakdown.baseValue)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Kilometerstand correctie</span>
+                        <span className={`font-medium ${result.data.aiValuation.priceBreakdown.mileageAdjustment >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {result.data.aiValuation.priceBreakdown.mileageAdjustment >= 0 ? '+' : ''}{formatCurrency(result.data.aiValuation.priceBreakdown.mileageAdjustment)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Opties & uitrusting</span>
+                        <span className={`font-medium ${result.data.aiValuation.priceBreakdown.optionsAdjustment >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {result.data.aiValuation.priceBreakdown.optionsAdjustment >= 0 ? '+' : ''}{formatCurrency(result.data.aiValuation.priceBreakdown.optionsAdjustment)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Staat & leeftijd</span>
+                        <span className={`font-medium ${result.data.aiValuation.priceBreakdown.conditionAdjustment >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {result.data.aiValuation.priceBreakdown.conditionAdjustment >= 0 ? '+' : ''}{formatCurrency(result.data.aiValuation.priceBreakdown.conditionAdjustment)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Marktomstandigheden</span>
+                        <span className={`font-medium ${result.data.aiValuation.priceBreakdown.marketAdjustment >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {result.data.aiValuation.priceBreakdown.marketAdjustment >= 0 ? '+' : ''}{formatCurrency(result.data.aiValuation.priceBreakdown.marketAdjustment)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between pt-3 border-t border-slate-200">
+                        <span className="font-semibold">Berekende waarde</span>
+                        <span className="font-bold">{formatCurrency(result.data.aiValuation.priceBreakdown.calculatedTotal)}</span>
+                      </div>
+                    </div>
+                    {result.data.aiValuation.priceBreakdown.explanation && (
+                      <div className="mt-4 pt-4 border-t border-slate-200">
+                        <p className="text-xs text-slate-500">{result.data.aiValuation.priceBreakdown.explanation}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(result.data.aiValuation?.pros?.length || result.data.aiValuation?.cons?.length) && (
+                  <div className="card">
+                    <h3 className="font-semibold text-lg mb-4">📋 Beoordeling</h3>
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {result.data.aiValuation.pros && result.data.aiValuation.pros.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-medium text-emerald-700 mb-2 flex items-center gap-1">
+                            <span className="text-emerald-500">✓</span> Pluspunten
+                          </h4>
+                          <ul className="space-y-2">
+                            {result.data.aiValuation.pros.map((pro: string, index: number) => (
+                              <li key={index} className="text-sm text-slate-700 flex items-start gap-2">
+                                <span className="text-emerald-500 mt-0.5">•</span>
+                                <span>{pro}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {result.data.aiValuation.cons && result.data.aiValuation.cons.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-medium text-red-700 mb-2 flex items-center gap-1">
+                            <span className="text-red-500">!</span> Aandachtspunten
+                          </h4>
+                          <ul className="space-y-2">
+                            {result.data.aiValuation.cons.map((con: string, index: number) => (
+                              <li key={index} className="text-sm text-slate-700 flex items-start gap-2">
+                                <span className="text-red-500 mt-0.5">•</span>
+                                <span>{con}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="card">
                   <h3 className="font-semibold text-lg mb-4">BPM Berekening</h3>
