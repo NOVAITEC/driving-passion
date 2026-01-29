@@ -243,9 +243,23 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
                 make = brand
                 # Model is what comes after the brand
                 model_part = title[len(brand):].strip()
-                # Take first 2-3 words as model
-                model_words = model_part.split()[:3]
-                model = " ".join(model_words)
+                # Extract model with engine variant (e.g., "Golf 2.0 TDI" not just "Golf")
+                # Include more words to capture engine size and type
+                # Stop at common descriptive words that come after the core model
+                stop_words = ["cabrio", "cabriolet", "limousine", "sedan", "wagon",
+                             "kombi", "estate", "touring", "avant", "sportback",
+                             "coupe", "suv", "roadster", "convertible", "van",
+                             "panorama", "xenon", "navi", "automatik", "dsg",
+                             "schalter", "benzin", "diesel", "hybrid"]
+                model_words = []
+                for word in model_part.split():
+                    if word.lower() in stop_words:
+                        break
+                    model_words.append(word)
+                    # Take up to 5 words to capture variants like "Golf VII 2.0 TDI"
+                    if len(model_words) >= 5:
+                        break
+                model = " ".join(model_words) if model_words else model_part.split()[0] if model_part.split() else "Unknown"
                 break
 
         if make == "Unknown":
@@ -254,7 +268,8 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
             if len(parts) >= 1:
                 make = parts[0]
             if len(parts) >= 2:
-                model = " ".join(parts[1:3])
+                # Take up to 4 words for model
+                model = " ".join(parts[1:min(5, len(parts))])
 
     # Override with explicit make/model if available
     if item.get("brand"):
@@ -341,6 +356,7 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
         "petrol"
     )
     fuel_type = normalize_fuel_type(str(fuel_raw))
+    print(f"[MOBILE.DE] Fuel raw: {fuel_raw} → normalized: {fuel_type}")
 
     # Get transmission from attributes - key is "Transmission"
     trans_raw = (
@@ -349,6 +365,81 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
         "automatic"
     )
     transmission = normalize_transmission(str(trans_raw))
+
+    # ENHANCEMENT: If model is too generic (just 1-2 words like "Golf" or "3 Series"),
+    # try to enrich it with engine info from attributes
+    # This helps find more accurate market comparables
+    if len(model.split()) <= 2 and not any(char.isdigit() for char in model):
+        # Model is generic (e.g., "Golf", "3 Series") without engine size
+        # First try to get actual engine displacement from attributes
+        engine_size = None
+        cubic_capacity = get_attr([
+            "Cubic Capacity", "Cubic capacity", "cubic capacity",
+            "Hubraum", "hubraum", "Engine Size", "engine size",
+            "Displacement", "displacement", "ccm", "cc"
+        ])
+
+        if cubic_capacity:
+            print(f"[MOBILE.DE] Cubic capacity attribute: {cubic_capacity}")
+            # Parse values like "1,984 cc", "1984 ccm", "2.0 L", "1984"
+            cc_str = str(cubic_capacity).lower().replace(",", "").replace(".", "")
+            cc_digits = "".join(filter(str.isdigit, cc_str))
+            if cc_digits:
+                cc = int(cc_digits)
+                # Convert cc to liters (e.g., 1984 cc = 2.0 L)
+                if cc > 100:  # It's in cc, not liters
+                    liters = cc / 1000
+                else:
+                    liters = cc  # Already in liters (rare)
+                # Round to common engine sizes
+                if liters < 1.1:
+                    engine_size = "1.0"
+                elif liters < 1.3:
+                    engine_size = "1.2"
+                elif liters < 1.5:
+                    engine_size = "1.4"
+                elif liters < 1.7:
+                    engine_size = "1.6"
+                elif liters < 1.9:
+                    engine_size = "1.8"
+                elif liters < 2.1:
+                    engine_size = "2.0"
+                elif liters < 2.3:
+                    engine_size = "2.2"
+                elif liters < 2.6:
+                    engine_size = "2.5"
+                elif liters < 2.9:
+                    engine_size = "2.8"
+                elif liters < 3.1:
+                    engine_size = "3.0"
+                elif liters < 3.3:
+                    engine_size = "3.2"
+                elif liters < 3.6:
+                    engine_size = "3.5"
+                elif liters < 4.1:
+                    engine_size = "4.0"
+                else:
+                    engine_size = f"{liters:.1f}"
+                print(f"[MOBILE.DE] Parsed engine size: {cc} cc → {engine_size} L")
+
+        # Build engine designation with fuel type suffix
+        if engine_size:
+            if fuel_type == "diesel":
+                engine_suffix = "TDI"  # VW/Audi diesel
+            elif fuel_type == "petrol":
+                engine_suffix = "TSI"  # VW/Audi petrol
+            else:
+                engine_suffix = ""
+
+            original_model = model
+            if engine_suffix:
+                model = f"{model} {engine_size} {engine_suffix}"
+            else:
+                model = f"{model} {engine_size}"
+            print(f"[MOBILE.DE] Enriched model from '{original_model}' to '{model}' based on actual displacement")
+        else:
+            # Fallback: No displacement found, log available attributes for debugging
+            print(f"[MOBILE.DE] No cubic capacity found. Available attributes: {list(attrs.keys())}")
 
     # Get CO2 - often not available, estimate based on engine
     co2 = 150  # Default

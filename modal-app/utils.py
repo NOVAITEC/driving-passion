@@ -103,7 +103,11 @@ def extract_model_variant(model: str) -> tuple[str, Optional[str]]:
     Extract base model and variant from model string.
 
     E.g., "RSQ3" -> ("RS Q3", None)
-          "320d xDrive" -> ("320d", "xDrive")
+          "320d xDrive" -> ("320d xDrive", None)
+          "Golf 2.0 TDI Highline" -> ("Golf 2.0 TDI", "Highline")
+
+    IMPORTANT: Engine variants (numbers + fuel type) are kept in base_model
+    for better market comparisons. Only trim levels are separated as variant.
 
     Args:
         model: Raw model string
@@ -130,9 +134,48 @@ def extract_model_variant(model: str) -> tuple[str, Optional[str]]:
         if key in model_lower:
             return corrected, None
 
-    # Check for variants
+    # Split model into parts
     parts = model.split()
-    if len(parts) > 1:
-        return parts[0], " ".join(parts[1:])
+    if len(parts) <= 1:
+        return model, None
 
-    return model, None
+    # Identify engine-related parts (should stay in base_model)
+    # vs trim/equipment parts (can be separated as variant)
+    engine_indicators = ['tdi', 'tsi', 'tfsi', 'fsi', 'gti', 'gtd', 'rs', 'amg',
+                        'xdrive', '4matic', 'quattro', 'e-tron', 'phev', 'hybrid',
+                        'd', 'i', 'e', 's', 'm']  # Common suffixes like "320d", "118i"
+    trim_levels = ['highline', 'comfortline', 'trendline', 'style', 'sport',
+                   'business', 'executive', 'luxury', 'premium', 'edition',
+                   'line', 'pack', 'plus', 'comfort', 'elegance', 'dynamic']
+
+    # Find where trim level starts (if any)
+    trim_start_idx = None
+    for i, part in enumerate(parts):
+        part_lower = part.lower()
+        # Check if this is a trim level word
+        if part_lower in trim_levels:
+            trim_start_idx = i
+            break
+        # If we see engine indicators, keep going
+        is_engine_part = False
+        for indicator in engine_indicators:
+            if indicator in part_lower or part_lower.endswith(indicator):
+                is_engine_part = True
+                break
+        # If it's a number (engine size like "2.0" or "320"), keep it
+        if any(c.isdigit() for c in part):
+            is_engine_part = True
+        # If not an engine part and not the first few words, might be trim
+        if not is_engine_part and i > 2:
+            trim_start_idx = i
+            break
+
+    if trim_start_idx is None:
+        # No clear trim level found, keep everything as base model
+        return model, None
+
+    # Split at trim level
+    base_model = " ".join(parts[:trim_start_idx])
+    variant = " ".join(parts[trim_start_idx:])
+
+    return base_model, variant if variant else None

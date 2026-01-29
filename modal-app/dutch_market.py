@@ -37,6 +37,44 @@ class MarketStats:
     median_price: float
 
 
+def extract_base_model_name(model: str) -> str:
+    """
+    Extract just the base model name without engine specs for URL paths.
+
+    E.g., "Golf 2.0 TSI" -> "Golf"
+          "3 Series 320d" -> "3 Series"
+          "RS Q3" -> "RS Q3"
+
+    Args:
+        model: Full model string including engine specs
+
+    Returns:
+        Base model name only
+    """
+    parts = model.split()
+    if not parts:
+        return model
+
+    # Keep collecting parts until we hit a number (engine size) or fuel type indicator
+    engine_indicators = ['tdi', 'tsi', 'tfsi', 'fsi', 'cdi', 'cgi', 'hdi', 'dci',
+                        'cdti', 'jtd', 'mjet', 'bluehdi', 'crdi']
+    base_parts = []
+    for part in parts:
+        part_lower = part.lower()
+        # Stop if we see engine size like "2.0" or "1.6"
+        if '.' in part and any(c.isdigit() for c in part):
+            break
+        # Stop if we see fuel type indicators
+        if part_lower in engine_indicators:
+            break
+        # Stop if it looks like just a number (displacement without dot)
+        if part.isdigit() and len(part) <= 2:
+            break
+        base_parts.append(part)
+
+    return " ".join(base_parts) if base_parts else parts[0]
+
+
 def build_autoscout24_search_url(vehicle: VehicleData) -> str:
     """
     Build AutoScout24 NL search URL for comparable vehicles.
@@ -49,18 +87,27 @@ def build_autoscout24_search_url(vehicle: VehicleData) -> str:
     """
     base_url = "https://www.autoscout24.nl/lst"
 
-    # Normalize make/model for URL
+    # Normalize make for URL
     make = vehicle.make.lower().replace(" ", "-")
 
-    # Handle RS models and other variants
-    base_model, variant = extract_model_variant(vehicle.model)
-    model = base_model.lower().replace(" ", "-")
+    # Get full model with engine info for search query
+    full_model, variant = extract_model_variant(vehicle.model)
 
-    # Build path
-    path = f"/{make}/{model}"
+    # Extract just base model name for URL path (AutoScout24 doesn't accept engine specs in path)
+    base_model_name = extract_base_model_name(vehicle.model)
+    model_path = base_model_name.lower().replace(" ", "-")
+
+    # Build path with base model only
+    path = f"/{make}/{model_path}"
 
     # Build query parameters
     params = []
+
+    # Add search query with full model including engine variant for better matching
+    # This helps filter results to the specific engine size
+    if full_model != base_model_name:
+        # Include engine specs in search query
+        params.append(f"search={full_model.replace(' ', '+')}")
 
     # Year range: ±1 year
     params.append(f"fregfrom={vehicle.year - 1}")
@@ -99,7 +146,9 @@ def build_autoscout24_search_url(vehicle: VehicleData) -> str:
     params.append("cy=NL")
 
     query = "&".join(params)
-    return f"{base_url}{path}?{query}"
+    url = f"{base_url}{path}?{query}"
+    print(f"[AUTOSCOUT24 NL] Search URL: {url}")
+    return url
 
 
 def parse_autoscout24_search_results(html: str) -> list[DutchComparable]:
