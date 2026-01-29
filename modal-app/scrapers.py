@@ -30,6 +30,7 @@ class VehicleData:
     title: str = ""
     features: list = None
     attributes: dict = None
+    original_url: str = ""  # Original URL before normalization
 
     def __post_init__(self):
         if self.features is None:
@@ -53,11 +54,14 @@ def detect_source(url: str) -> str:
     url_lower = url.lower()
     if "mobile.de" in url_lower or "suchen.mobile.de" in url_lower:
         return "mobile.de"
-    # AutoScout24 Germany - various URL formats
+    # AutoScout24 - support both German (.de) and Dutch (.nl) versions
     if any(domain in url_lower for domain in [
         "autoscout24.de",
+        "autoscout24.nl",
         "autoscout24.com/de",  # International site, German section
+        "autoscout24.com/nl",  # International site, Dutch section
         "www.autoscout24.de",
+        "www.autoscout24.nl",
     ]):
         return "autoscout24"
     return "unknown"
@@ -84,6 +88,39 @@ def clean_autoscout24_url(url: str) -> str:
     """Clean AutoScout24 URL by removing tracking parameters."""
     # Remove query parameters - they're just tracking info
     return url.split("?")[0]
+
+
+def normalize_mobile_de_url(url: str) -> str:
+    """
+    Normalize mobile.de URL to the standard German format.
+
+    Converts various URL formats to the standard German version that Apify expects:
+    - https://www.mobile.de/nl/voertuigen/details.html?id=123 -> https://suchen.mobile.de/fahrzeuge/details.html?id=123
+    - https://www.mobile.de/fr/vehicules/details.html?id=123 -> https://suchen.mobile.de/fahrzeuge/details.html?id=123
+    - https://www.mobile.de/en/vehicles/details.html?id=123 -> https://suchen.mobile.de/fahrzeuge/details.html?id=123
+    """
+    import re
+
+    # Extract the listing ID from the URL
+    listing_id = None
+    if "id=" in url:
+        listing_id = url.split("id=")[1].split("&")[0]
+
+    if not listing_id:
+        # If we can't extract the ID, return original URL
+        return url
+
+    # Check if this is a localized URL (contains language code like /nl/, /fr/, /en/, etc.)
+    # Pattern matches: mobile.de/xx/ where xx is a 2-letter language code
+    localized_pattern = r'mobile\.de/([a-z]{2})/'
+    if re.search(localized_pattern, url):
+        # Convert to standard German URL format
+        normalized_url = f"https://suchen.mobile.de/fahrzeuge/details.html?id={listing_id}"
+        print(f"[MOBILE.DE] Normalized URL from localized version: {url} -> {normalized_url}")
+        return normalized_url
+
+    # Already in correct format or standard format
+    return url
 
 
 async def run_apify_actor(
@@ -606,10 +643,17 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
     try:
         if source == "mobile.de":
             actor_id = APIFY_ACTORS["mobile_de"]
+            # Normalize the URL to standard German format (handles /nl/, /fr/, /en/ versions)
+            normalized_url = normalize_mobile_de_url(url)
+            url_was_normalized = normalized_url != url
             input_data = {
-                "startUrls": [{"url": url}],
+                "startUrls": [{"url": normalized_url}],
                 "maxItems": 1,
             }
+            print(f"[MOBILE.DE] Using actor: {actor_id}")
+            print(f"[MOBILE.DE] Original URL: {url}")
+            print(f"[MOBILE.DE] Normalized URL: {normalized_url}")
+            print(f"[MOBILE.DE] URL was normalized: {url_was_normalized}")
             results = await run_apify_actor(actor_id, input_data, apify_token)
 
             if not results:
@@ -619,7 +663,10 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
                     error_message="Listing not found or no longer available.",
                 )
 
-            vehicle = parse_mobile_de_result(results[0], url)
+            vehicle = parse_mobile_de_result(results[0], normalized_url)
+            # Store original URL if it was normalized
+            if url_was_normalized:
+                vehicle.original_url = url
 
         else:  # autoscout24
             actor_id = APIFY_ACTORS["autoscout24"]
@@ -677,7 +724,7 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
 
 def vehicle_to_dict(vehicle: VehicleData) -> dict:
     """Convert VehicleData to dictionary for JSON serialization."""
-    return {
+    result = {
         "make": vehicle.make,
         "model": vehicle.model,
         "year": vehicle.year,
@@ -693,3 +740,8 @@ def vehicle_to_dict(vehicle: VehicleData) -> dict:
         "features": vehicle.features,
         "attributes": vehicle.attributes,
     }
+    # Include original URL if the URL was normalized
+    if vehicle.original_url:
+        result["originalUrl"] = vehicle.original_url
+        result["urlWasNormalized"] = True
+    return result

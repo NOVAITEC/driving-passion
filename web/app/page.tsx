@@ -14,6 +14,9 @@ interface VehicleData {
   firstRegistrationDate: string
   title?: string
   features?: string[]
+  listingUrl?: string
+  originalUrl?: string
+  urlWasNormalized?: boolean
 }
 
 interface BPMData {
@@ -115,7 +118,7 @@ export default function Home() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!url.trim()) {
-      setError('Vul een URL in van mobile.de of autoscout24.de')
+      setError('Vul een URL in van mobile.de of autoscout24')
       return
     }
 
@@ -181,7 +184,7 @@ export default function Home() {
         <div className="text-center mb-10">
           <h1 className="text-4xl font-bold text-slate-900 mb-3">Auto Import Calculator</h1>
           <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-            Plak een link van een Duitse advertentie en ontdek binnen seconden of de auto winstgevend is om te importeren.
+            Plak een link van een advertentie en ontdek binnen seconden of de auto winstgevend is om te importeren.
           </p>
         </div>
 
@@ -191,18 +194,18 @@ export default function Home() {
             <form onSubmit={handleSubmit}>
               <div className="mb-6">
                 <label htmlFor="url" className="block text-sm font-medium text-slate-700 mb-2">
-                  Duitse advertentie URL
+                  Advertentie URL
                 </label>
                 <input
                   type="url"
                   id="url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://www.mobile.de/... of https://www.autoscout24.de/..."
+                  placeholder="https://www.mobile.de/... of https://www.autoscout24.de/.../nl/..."
                   className="input-field"
                   disabled={isLoading}
                 />
-                <p className="mt-2 text-sm text-slate-500">Ondersteund: mobile.de en autoscout24.de</p>
+                <p className="mt-2 text-sm text-slate-500">Ondersteund: mobile.de en autoscout24 (zowel .de als .nl)</p>
               </div>
               <button type="submit" disabled={isLoading || !url.trim()} className="btn-primary">
                 {isLoading ? 'Analyseren...' : 'Analyseer Advertentie'}
@@ -251,13 +254,22 @@ export default function Home() {
                 >
                   mobile.de - Test advertentie
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setUrl('https://www.autoscout24.de/angebote/')}
+                <a
+                  href="https://www.autoscout24.de/lst"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="text-sm text-primary-600 hover:text-primary-700 underline text-left"
                 >
-                  autoscout24.de - Ga naar AutoScout24 om een advertentie te vinden
-                </button>
+                  autoscout24.de - Zoek een Duitse advertentie
+                </a>
+                <a
+                  href="https://www.autoscout24.nl/lst"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-primary-600 hover:text-primary-700 underline text-left"
+                >
+                  autoscout24.nl - Zoek een Nederlandse advertentie
+                </a>
               </div>
             </div>
           </div>
@@ -288,12 +300,31 @@ export default function Home() {
 
                 <div className="card">
                   <h3 className="font-semibold text-lg mb-4">Voertuig</h3>
+                  {result.data.vehicle.urlWasNormalized && (
+                    <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-sm text-blue-700">
+                        <span className="font-medium">URL automatisch geconverteerd:</span> De Nederlandse versie van mobile.de is omgezet naar de Duitse versie voor accurate scraping.
+                      </p>
+                    </div>
+                  )}
                   <div className="space-y-3">
                     <div className="flex justify-between"><span className="text-slate-600">Auto</span><span className="font-medium">{result.data.vehicle.make} {result.data.vehicle.model}</span></div>
                     <div className="flex justify-between"><span className="text-slate-600">Bouwjaar</span><span className="font-medium">{result.data.vehicle.year}</span></div>
                     <div className="flex justify-between"><span className="text-slate-600">Kilometerstand</span><span className="font-medium">{formatNumber(result.data.vehicle.mileage_km)} km</span></div>
                     <div className="flex justify-between"><span className="text-slate-600">Brandstof</span><span className="font-medium capitalize">{result.data.vehicle.fuelType}</span></div>
                     <div className="flex justify-between"><span className="text-slate-600">CO2 uitstoot</span><span className="font-medium">{result.data.vehicle.co2_gkm} g/km</span></div>
+                    {result.data.vehicle.listingUrl && (
+                      <div className="pt-3 border-t border-slate-200">
+                        <a
+                          href={result.data.vehicle.listingUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-primary-600 hover:text-primary-700 underline"
+                        >
+                          Bekijk originele advertentie
+                        </a>
+                      </div>
+                    )}
                   </div>
                 </div>
 
