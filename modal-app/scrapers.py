@@ -366,6 +366,9 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
             else:
                 co2 = min(300, max(100, int(kw * 1.3)))
 
+    # Use the URL returned by Apify if available, otherwise use the provided URL
+    actual_url = item.get("url", item.get("listingUrl", url))
+
     return VehicleData(
         make=make,
         model=model,
@@ -376,7 +379,7 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
         transmission=transmission,
         co2_gkm=co2,
         first_registration_date=first_reg,
-        listing_url=url,
+        listing_url=actual_url,
         source="mobile.de",
         title=title or f"{make} {model}",
         features=item.get("features", item.get("equipment", [])),
@@ -646,14 +649,19 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
             # Normalize the URL to standard German format (handles /nl/, /fr/, /en/ versions)
             normalized_url = normalize_mobile_de_url(url)
             url_was_normalized = normalized_url != url
+            # The rental version (3x1t~mobile-de-scraper) requires searchPageURLs parameter
+            # and works best with auto-inserat URL format
             input_data = {
-                "startUrls": [{"url": normalized_url}],
-                "maxItems": 1,
+                "automaticPaging": True,
+                "searchCategory": "Car",
+                "searchPageURLMaxItems": 1,
+                "searchPageURLs": [normalized_url],
             }
             print(f"[MOBILE.DE] Using actor: {actor_id}")
             print(f"[MOBILE.DE] Original URL: {url}")
             print(f"[MOBILE.DE] Normalized URL: {normalized_url}")
             print(f"[MOBILE.DE] URL was normalized: {url_was_normalized}")
+            print(f"[MOBILE.DE] Input data: {input_data}")
             results = await run_apify_actor(actor_id, input_data, apify_token)
 
             if not results:
