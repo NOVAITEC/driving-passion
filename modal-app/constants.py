@@ -69,6 +69,9 @@ MARGIN_THRESHOLDS = {
 # SCRAPER CONFIGURATIE
 # =============================================================================
 
+# Direct scraping toggle - set to False to disable direct HTTP scraping and use Apify only
+USE_DIRECT_SCRAPING = True
+
 APIFY_ACTORS = {
     "mobile_de": "3x1t~mobile-de-scraper",  # Rental version (not PPR) - supports detail pages
     "autoscout24": "3x1t~autoscout24-scraper-ppr",  # Same developer as mobile.de

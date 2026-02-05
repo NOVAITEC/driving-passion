@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Any
 import asyncio
+import re
+import json
 
 from constants import APIFY_ACTORS
 from utils import normalize_fuel_type, normalize_transmission
+from user_agents import get_random_headers
 
 
 @dataclass
@@ -202,6 +205,362 @@ async def run_apify_actor(
         return response.json()
 
 
+async def scrape_autoscout24_de_direct(url: str) -> ScrapeResult:
+    """
+    Scrape AutoScout24.de listing directly via HTTP (no Apify).
+
+    Uses __NEXT_DATA__ JSON extraction pattern proven in AutoScout24 NL scraper.
+
+    Args:
+        url: AutoScout24.de listing URL
+
+    Returns:
+        ScrapeResult with vehicle data or error
+    """
+    print(f"[AUTOSCOUT24.DE DIRECT] Scraping: {url}")
+
+    # Clean URL - remove tracking parameters
+    clean_url = clean_autoscout24_url(url)
+
+    try:
+        # HTTP GET with randomized realistic headers
+        headers = get_random_headers()
+        headers["Referer"] = "https://www.autoscout24.de/"
+
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(clean_url, headers=headers, timeout=30.0)
+
+            # Check for error status codes
+            if response.status_code == 404:
+                return ScrapeResult(
+                    success=False,
+                    error_type="LISTING_OFFLINE",
+                    error_message="Listing not found (404).",
+                )
+            elif response.status_code == 410:
+                return ScrapeResult(
+                    success=False,
+                    error_type="LISTING_OFFLINE",
+                    error_message="Listing no longer available (410 Gone).",
+                )
+            elif response.status_code == 403:
+                return ScrapeResult(
+                    success=False,
+                    error_type="SCRAPER_BLOCKED",
+                    error_message="Access blocked (403). Use Apify fallback.",
+                )
+            elif response.status_code == 429:
+                return ScrapeResult(
+                    success=False,
+                    error_type="RATE_LIMITED",
+                    error_message="Rate limited (429). Use Apify fallback.",
+                )
+
+            response.raise_for_status()
+            html = response.text
+
+        print(f"[AUTOSCOUT24.DE DIRECT] HTTP {response.status_code}, HTML length: {len(html)}")
+
+        # Extract __NEXT_DATA__ JSON (proven pattern from AutoScout24 NL)
+        match = re.search(
+            r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+            html,
+            re.DOTALL
+        )
+
+        if not match:
+            # Try alternative: window.__INITIAL_STATE__
+            match = re.search(
+                r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\});',
+                html,
+                re.DOTALL
+            )
+            if not match:
+                print("[AUTOSCOUT24.DE DIRECT] No __NEXT_DATA__ or __INITIAL_STATE__ found")
+                return ScrapeResult(
+                    success=False,
+                    error_type="PARSE_ERROR",
+                    error_message="Could not extract vehicle data from page.",
+                    error_details="Tried __NEXT_DATA__ and __INITIAL_STATE__ patterns",
+                )
+
+        try:
+            json_data = json.loads(match.group(1))
+            print("[AUTOSCOUT24.DE DIRECT] Extracted JSON data successfully")
+
+            # Navigate JSON structure to find vehicle data
+            # AutoScout24 typically stores listing data in props.pageProps.listingDetails
+            listing_data = None
+
+            # Try multiple paths in the JSON structure
+            if "props" in json_data:
+                page_props = json_data.get("props", {}).get("pageProps", {})
+
+                # Try different property names
+                for key in ["listingDetails", "listing", "vehicleDetails", "vehicle", "data"]:
+                    if key in page_props:
+                        listing_data = page_props[key]
+                        print(f"[AUTOSCOUT24.DE DIRECT] Found listing data in props.pageProps.{key}")
+                        break
+
+            if not listing_data:
+                # Try top-level keys
+                for key in ["listing", "vehicle", "data", "pageProps"]:
+                    if key in json_data:
+                        listing_data = json_data[key]
+                        print(f"[AUTOSCOUT24.DE DIRECT] Found listing data in top-level {key}")
+                        break
+
+            if not listing_data:
+                print(f"[AUTOSCOUT24.DE DIRECT] Available keys: {list(json_data.keys())}")
+                return ScrapeResult(
+                    success=False,
+                    error_type="PARSE_ERROR",
+                    error_message="Could not find listing data in JSON structure.",
+                    error_details=f"Available top-level keys: {list(json_data.keys())}",
+                )
+
+            # Parse using existing AutoScout24 parser
+            vehicle = parse_autoscout24_result(listing_data, clean_url)
+
+            # Validate we got real data
+            if vehicle.price_eur == 0:
+                return ScrapeResult(
+                    success=False,
+                    error_type="LISTING_SOLD",
+                    error_message="Listing appears to be sold or price not available.",
+                )
+
+            print(f"[AUTOSCOUT24.DE DIRECT] SUCCESS: {vehicle.make} {vehicle.model}, €{vehicle.price_eur}")
+            return ScrapeResult(success=True, data=vehicle)
+
+        except json.JSONDecodeError as e:
+            print(f"[AUTOSCOUT24.DE DIRECT] JSON decode error: {e}")
+            return ScrapeResult(
+                success=False,
+                error_type="PARSE_ERROR",
+                error_message="Failed to parse JSON data.",
+                error_details=str(e),
+            )
+
+    except httpx.TimeoutException:
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_TIMEOUT",
+            error_message="Request timed out after 30s.",
+        )
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[AUTOSCOUT24.DE DIRECT] Exception: {e}")
+        print(f"[AUTOSCOUT24.DE DIRECT] Traceback: {error_trace}")
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_ERROR",
+            error_message="Direct scraping failed.",
+            error_details=f"{str(e)} | {error_trace[:500]}",
+        )
+
+
+async def scrape_mobile_de_direct(url: str) -> ScrapeResult:
+    """
+    Scrape mobile.de listing directly via HTTP (no Apify).
+
+    Tries multiple JSON extraction patterns: __NEXT_DATA__, __INITIAL_STATE__, JSON-LD.
+
+    Args:
+        url: mobile.de listing URL
+
+    Returns:
+        ScrapeResult with vehicle data or error
+    """
+    print(f"[MOBILE.DE DIRECT] Scraping: {url}")
+
+    # Normalize URL to standard German format
+    normalized_url = normalize_mobile_de_url(url)
+
+    try:
+        # HTTP GET with randomized realistic headers
+        headers = get_random_headers()
+        headers["Referer"] = "https://suchen.mobile.de/"
+
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(normalized_url, headers=headers, timeout=30.0)
+
+            # Check for error status codes
+            if response.status_code == 404:
+                return ScrapeResult(
+                    success=False,
+                    error_type="LISTING_OFFLINE",
+                    error_message="Listing not found (404).",
+                )
+            elif response.status_code == 410:
+                return ScrapeResult(
+                    success=False,
+                    error_type="LISTING_OFFLINE",
+                    error_message="Listing no longer available (410 Gone).",
+                )
+            elif response.status_code == 403:
+                return ScrapeResult(
+                    success=False,
+                    error_type="SCRAPER_BLOCKED",
+                    error_message="Access blocked (403). Use Apify fallback.",
+                )
+            elif response.status_code == 429:
+                return ScrapeResult(
+                    success=False,
+                    error_type="RATE_LIMITED",
+                    error_message="Rate limited (429). Use Apify fallback.",
+                )
+
+            response.raise_for_status()
+            html = response.text
+
+        print(f"[MOBILE.DE DIRECT] HTTP {response.status_code}, HTML length: {len(html)}")
+
+        # Try Pattern 1: __NEXT_DATA__
+        match = re.search(
+            r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+            html,
+            re.DOTALL
+        )
+
+        json_data = None
+        extraction_method = None
+
+        if match:
+            try:
+                json_data = json.loads(match.group(1))
+                extraction_method = "__NEXT_DATA__"
+                print("[MOBILE.DE DIRECT] Extracted __NEXT_DATA__")
+            except json.JSONDecodeError:
+                pass
+
+        # Try Pattern 2: window.__INITIAL_STATE__
+        if not json_data:
+            match = re.search(
+                r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\});',
+                html,
+                re.DOTALL
+            )
+            if match:
+                try:
+                    json_data = json.loads(match.group(1))
+                    extraction_method = "__INITIAL_STATE__"
+                    print("[MOBILE.DE DIRECT] Extracted __INITIAL_STATE__")
+                except json.JSONDecodeError:
+                    pass
+
+        # Try Pattern 3: JSON-LD structured data (may have multiple blocks)
+        if not json_data:
+            # Find ALL JSON-LD blocks
+            matches = re.finditer(
+                r'<script type="application/ld\+json">(.*?)</script>',
+                html,
+                re.DOTALL
+            )
+            for match in matches:
+                try:
+                    data = json.loads(match.group(1))
+                    # Look for Car/Vehicle/Product types (not Organization)
+                    if data.get("@type") in ["Car", "Vehicle", "Product", "Offer"]:
+                        json_data = data
+                        extraction_method = "JSON-LD"
+                        print(f"[MOBILE.DE DIRECT] Extracted JSON-LD with @type: {data.get('@type')}")
+                        break
+                except json.JSONDecodeError:
+                    continue
+
+        if not json_data:
+            print("[MOBILE.DE DIRECT] No JSON data found with any pattern")
+            return ScrapeResult(
+                success=False,
+                error_type="PARSE_ERROR",
+                error_message="Could not extract vehicle data from page.",
+                error_details="Tried __NEXT_DATA__, __INITIAL_STATE__, and JSON-LD patterns",
+            )
+
+        # Navigate JSON structure to find vehicle/listing data
+        listing_data = None
+
+        if extraction_method == "__NEXT_DATA__":
+            # Try Next.js structure: props.pageProps.*
+            if "props" in json_data:
+                page_props = json_data.get("props", {}).get("pageProps", {})
+                for key in ["ad", "listing", "vehicle", "data", "adDetails", "classifiedAd"]:
+                    if key in page_props:
+                        listing_data = page_props[key]
+                        print(f"[MOBILE.DE DIRECT] Found data in props.pageProps.{key}")
+                        break
+
+        if not listing_data and extraction_method == "__INITIAL_STATE__":
+            # Try common state keys
+            for key in ["ad", "listing", "vehicle", "classified", "data"]:
+                if key in json_data:
+                    listing_data = json_data[key]
+                    print(f"[MOBILE.DE DIRECT] Found data in {key}")
+                    break
+
+        if not listing_data and extraction_method == "JSON-LD":
+            # JSON-LD is already the listing data for Car/Vehicle types
+            if json_data.get("@type") in ["Car", "Vehicle", "Product"]:
+                listing_data = json_data
+                print("[MOBILE.DE DIRECT] Using JSON-LD data directly")
+
+        if not listing_data:
+            # Try top-level keys as fallback
+            for key in ["ad", "listing", "vehicle", "data"]:
+                if key in json_data:
+                    listing_data = json_data[key]
+                    print(f"[MOBILE.DE DIRECT] Found data in top-level {key}")
+                    break
+
+        if not listing_data:
+            print(f"[MOBILE.DE DIRECT] Available keys: {list(json_data.keys())}")
+            return ScrapeResult(
+                success=False,
+                error_type="PARSE_ERROR",
+                error_message="Could not find listing data in JSON structure.",
+                error_details=f"Method: {extraction_method}, Keys: {list(json_data.keys())}",
+            )
+
+        # Parse using existing mobile.de parser
+        vehicle = parse_mobile_de_result(listing_data, normalized_url)
+
+        # Store original URL if it was normalized
+        if normalized_url != url:
+            vehicle.original_url = url
+
+        # Validate we got real data
+        if vehicle.price_eur == 0:
+            return ScrapeResult(
+                success=False,
+                error_type="LISTING_SOLD",
+                error_message="Listing appears to be sold or price not available.",
+            )
+
+        print(f"[MOBILE.DE DIRECT] SUCCESS: {vehicle.make} {vehicle.model}, €{vehicle.price_eur}")
+        return ScrapeResult(success=True, data=vehicle)
+
+    except httpx.TimeoutException:
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_TIMEOUT",
+            error_message="Request timed out after 30s.",
+        )
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[MOBILE.DE DIRECT] Exception: {e}")
+        print(f"[MOBILE.DE DIRECT] Traceback: {error_trace}")
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_ERROR",
+            error_message="Direct scraping failed.",
+            error_details=f"{str(e)} | {error_trace[:500]}",
+        )
+
+
 def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
     """Parse mobile.de scraper result into VehicleData."""
     # The 3x1t~mobile-de-scraper-ppr actor returns attributes with keys like
@@ -318,16 +677,54 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
     # Parse "75,948 km" -> 75948
     mileage = int("".join(filter(str.isdigit, str(mileage_str))) or 0)
 
-    # Get price - this one is tricky, the actor seems to have issues
-    # Try to get from item.price first, but validate it
+    # Get price - this one is tricky, the actor may return various formats
+    # European format uses . as thousands separator and , as decimal
+    # E.g., "28.480,20" or "€ 28.480" or "28480.2"
     price_raw = item.get("price")
 
-    # The price field might be duplicated or corrupted
-    # A normal car price is 4-6 digits (1000 - 999999 EUR)
     price = 0
     if price_raw is not None:
-        price_str = str(price_raw)
-        # Extract all digits
+        price_str = str(price_raw).strip()
+        print(f"[MOBILE.DE] Raw price value: {repr(price_raw)}")
+
+        # Remove currency symbols and whitespace
+        price_str = price_str.replace("€", "").replace("EUR", "").strip()
+
+        # Handle European number format:
+        # "28.480,20" -> thousands separator is ., decimal is ,
+        # "28.480" -> could be 28480 or 28.480 (ambiguous, assume thousands sep)
+        # "28480.20" -> decimal point format (28480.20 euros)
+        # "28480" -> plain integer
+
+        if "," in price_str and "." in price_str:
+            # European format: "28.480,20" - dot is thousands, comma is decimal
+            # Remove thousands separator, replace decimal comma with dot
+            price_str = price_str.replace(".", "").replace(",", ".")
+        elif "," in price_str:
+            # Only comma: could be "28,480" (European) or "28480,20" (decimal)
+            parts = price_str.split(",")
+            if len(parts) == 2 and len(parts[1]) <= 2:
+                # Decimal: "28480,20" -> "28480.20"
+                price_str = price_str.replace(",", ".")
+            else:
+                # Thousands separator: "28,480" -> "28480"
+                price_str = price_str.replace(",", "")
+        elif "." in price_str:
+            # Only dot: could be "28.480" (thousands) or "28480.20" (decimal)
+            parts = price_str.split(".")
+            if len(parts) == 2:
+                if len(parts[1]) <= 2:
+                    # Decimal: "28480.20" -> keep as is (will truncate)
+                    pass
+                elif len(parts[1]) == 3:
+                    # Thousands separator: "28.480" -> "28480"
+                    price_str = price_str.replace(".", "")
+
+        # Now extract the integer part (ignore decimals)
+        # Split on decimal point and take first part
+        if "." in price_str:
+            price_str = price_str.split(".")[0]
+
         digits = "".join(filter(str.isdigit, price_str))
 
         if digits:
@@ -344,6 +741,8 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
                     price = int(digits[:min(6, len(digits))])
             else:
                 price = int(digits)
+
+        print(f"[MOBILE.DE] Parsed price: {price}")
 
     # Sanity check
     if price < 100 or price > 500000:
@@ -479,7 +878,148 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
 
 
 def parse_autoscout24_result(item: dict, url: str) -> VehicleData:
-    """Parse AutoScout24 scraper result into VehicleData."""
+    """
+    Parse AutoScout24 scraper result into VehicleData.
+
+    Supports two formats:
+    1. Apify format: flat structure with brand/model at top level
+    2. Direct scraping format: nested structure with vehicle.* and prices.*
+    """
+    # Check if this is direct scraping format (has 'vehicle' key)
+    if "vehicle" in item and isinstance(item["vehicle"], dict):
+        return _parse_autoscout24_direct(item, url)
+
+    # Otherwise, use the old Apify format parser
+    return _parse_autoscout24_apify(item, url)
+
+
+def _parse_autoscout24_direct(item: dict, url: str) -> VehicleData:
+    """Parse AutoScout24 direct scraping format (nested structure)."""
+    vehicle = item.get("vehicle", {})
+    prices = item.get("prices", {})
+
+    # Make and Model - direct from vehicle.*
+    make = vehicle.get("make", "Unknown")
+    model = vehicle.get("model", "Unknown")
+
+    # If model is too short, try to get variant for more specific matching
+    variant = vehicle.get("variant", "")
+    if variant and len(model.split()) <= 2:
+        # Avoid duplication: don't add variant if it already starts with model
+        # E.g., model="A3", variant="A3 Sportback" -> use "A3 Sportback"
+        if variant.lower().startswith(model.lower()):
+            model = variant.strip()
+        else:
+            model = f"{model} {variant}".strip()
+
+    # Price - from prices.public.priceRaw (clean integer)
+    price = prices.get("public", {}).get("priceRaw", 0) or 0
+    if not price:
+        price = prices.get("dealer", {}).get("priceRaw", 0) or 0
+
+    # Mileage - parse from "184.555 km" format
+    mileage_str = str(vehicle.get("mileageInKm", "0"))
+    mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
+
+    # First Registration - parse "11/2010" format
+    first_reg_str = str(vehicle.get("firstRegistrationDate", ""))
+    first_reg = datetime.now()
+    year = datetime.now().year
+
+    if first_reg_str and first_reg_str != "None":
+        try:
+            if "/" in first_reg_str:
+                # Format: MM/YYYY
+                parts = first_reg_str.split("/")
+                if len(parts) == 2:
+                    month = int(parts[0])
+                    year = int(parts[1])
+                    first_reg = datetime(year, month, 1)
+            elif "-" in first_reg_str:
+                # Format: YYYY-MM or YYYY-MM-DD
+                parts = first_reg_str.split("-")
+                year = int(parts[0])
+                month = int(parts[1]) if len(parts) > 1 else 1
+                first_reg = datetime(year, month, 1)
+        except:
+            pass
+
+    # Override with production year if available
+    if vehicle.get("productionYear"):
+        try:
+            year = int(vehicle.get("productionYear"))
+        except:
+            pass
+
+    # Fuel type - from fuelCategory.formatted (handles dict or string)
+    fuel_category = vehicle.get("fuelCategory", "petrol")
+    if isinstance(fuel_category, dict):
+        fuel_raw = fuel_category.get("formatted", fuel_category.get("raw", "petrol"))
+    else:
+        fuel_raw = fuel_category
+    fuel_type = normalize_fuel_type(str(fuel_raw))
+
+    # Transmission - from transmissionType (can be Dutch: "Handgeschakeld", "Automaat")
+    trans_raw = vehicle.get("transmissionType", "automatic")
+    transmission = normalize_transmission(str(trans_raw))
+
+    # CO2 - from co2emissionInGramPerKmWithFallback
+    co2 = 150 if fuel_type == "petrol" else 130  # Default
+    co2_data = vehicle.get("co2emissionInGramPerKmWithFallback", {})
+    if isinstance(co2_data, dict):
+        co2_raw = co2_data.get("raw")
+        if co2_raw and co2_raw != "None":
+            try:
+                co2 = int(co2_raw)
+                # Sanity check
+                if co2 < 50 or co2 > 400:
+                    co2 = 150 if fuel_type == "petrol" else 130
+            except:
+                pass
+
+    # If CO2 not available, estimate from power
+    if co2 in [130, 150]:
+        power_kw_str = str(vehicle.get("powerInKw", ""))
+        kw_digits = "".join(filter(str.isdigit, power_kw_str.split()[0] if power_kw_str.split() else power_kw_str))
+        if kw_digits:
+            kw = int(kw_digits)
+            if fuel_type == "diesel":
+                co2 = min(250, max(100, int(kw * 1.0)))
+            elif fuel_type == "electric":
+                co2 = 0
+            else:
+                co2 = min(300, max(100, int(kw * 1.3)))
+
+    # Title - from imgAltText or construct from make/model
+    title = item.get("imgAltText", f"{make} {model}")
+
+    # Equipment/features - from vehicle.equipment
+    equipment = vehicle.get("equipment", [])
+    if isinstance(equipment, list):
+        features = equipment
+    else:
+        features = []
+
+    return VehicleData(
+        make=make,
+        model=model,
+        year=year,
+        mileage_km=mileage,
+        price_eur=price,
+        fuel_type=fuel_type,
+        transmission=transmission,
+        co2_gkm=co2,
+        first_registration_date=first_reg,
+        listing_url=url,
+        source="autoscout24.de",
+        title=title,
+        features=features,
+        attributes=vehicle,  # Store full vehicle dict as attributes
+    )
+
+
+def _parse_autoscout24_apify(item: dict, url: str) -> VehicleData:
+    """Parse AutoScout24 Apify format (flat structure)."""
     # The 3x1t~autoscout24-scraper-ppr returns data with:
     # - brand, model at top level
     # - attributes dict with keys like "First Registration", "Mileage", "Fuel"
@@ -705,9 +1245,157 @@ def parse_autoscout24_result(item: dict, url: str) -> VehicleData:
     )
 
 
+async def scrape_mobile_de_apify(url: str, apify_token: str) -> ScrapeResult:
+    """
+    Scrape mobile.de listing via Apify actor (fallback method).
+
+    Args:
+        url: mobile.de listing URL
+        apify_token: Apify API token
+
+    Returns:
+        ScrapeResult with vehicle data or error
+    """
+    print(f"[MOBILE.DE APIFY] Scraping via Apify: {url}")
+
+    actor_id = APIFY_ACTORS["mobile_de"]
+    # Normalize the URL to standard German format (handles /nl/, /fr/, /en/ versions)
+    normalized_url = normalize_mobile_de_url(url)
+    url_was_normalized = normalized_url != url
+
+    # The rental version (3x1t~mobile-de-scraper) requires searchPageURLs parameter
+    input_data = {
+        "automaticPaging": True,
+        "searchCategory": "Car",
+        "searchPageURLMaxItems": 1,
+        "searchPageURLs": [normalized_url],
+    }
+
+    print(f"[MOBILE.DE APIFY] Using actor: {actor_id}")
+    print(f"[MOBILE.DE APIFY] Normalized URL: {normalized_url}")
+
+    try:
+        results = await run_apify_actor(actor_id, input_data, apify_token)
+
+        if not results:
+            return ScrapeResult(
+                success=False,
+                error_type="LISTING_OFFLINE",
+                error_message="Listing not found or no longer available.",
+            )
+
+        vehicle = parse_mobile_de_result(results[0], normalized_url)
+
+        # Store original URL if it was normalized
+        if url_was_normalized:
+            vehicle.original_url = url
+
+        # Validate we got real data
+        if vehicle.price_eur == 0:
+            return ScrapeResult(
+                success=False,
+                error_type="LISTING_SOLD",
+                error_message="Listing appears to be sold or price not available.",
+            )
+
+        return ScrapeResult(success=True, data=vehicle)
+
+    except TimeoutError as e:
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_TIMEOUT",
+            error_message="Apify actor timed out. Please try again.",
+            error_details=str(e),
+        )
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[MOBILE.DE APIFY] Exception: {e}")
+        print(f"[MOBILE.DE APIFY] Traceback: {error_trace}")
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_ERROR",
+            error_message="Apify scraping failed.",
+            error_details=f"{str(e)} | {error_trace[:500]}",
+        )
+
+
+async def scrape_autoscout24_de_apify(url: str, apify_token: str) -> ScrapeResult:
+    """
+    Scrape AutoScout24.de listing via Apify actor (fallback method).
+
+    Args:
+        url: AutoScout24.de listing URL
+        apify_token: Apify API token
+
+    Returns:
+        ScrapeResult with vehicle data or error
+    """
+    print(f"[AUTOSCOUT24.DE APIFY] Scraping via Apify: {url}")
+
+    actor_id = APIFY_ACTORS["autoscout24"]
+    # Clean the URL - remove tracking parameters
+    clean_url = clean_autoscout24_url(url)
+
+    # 3x1t~autoscout24-scraper-ppr expects startUrls as array of STRINGS
+    input_data = {
+        "startUrls": [clean_url],
+        "maxItems": 1,
+    }
+
+    print(f"[AUTOSCOUT24.DE APIFY] Using actor: {actor_id}")
+    print(f"[AUTOSCOUT24.DE APIFY] Clean URL: {clean_url}")
+
+    try:
+        results = await run_apify_actor(actor_id, input_data, apify_token)
+
+        if not results:
+            return ScrapeResult(
+                success=False,
+                error_type="LISTING_OFFLINE",
+                error_message="Listing not found or no longer available.",
+            )
+
+        vehicle = parse_autoscout24_result(results[0], clean_url)
+
+        # Validate we got real data
+        if vehicle.price_eur == 0:
+            return ScrapeResult(
+                success=False,
+                error_type="LISTING_SOLD",
+                error_message="Listing appears to be sold or price not available.",
+            )
+
+        return ScrapeResult(success=True, data=vehicle)
+
+    except TimeoutError as e:
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_TIMEOUT",
+            error_message="Apify actor timed out. Please try again.",
+            error_details=str(e),
+        )
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[AUTOSCOUT24.DE APIFY] Exception: {e}")
+        print(f"[AUTOSCOUT24.DE APIFY] Traceback: {error_trace}")
+        return ScrapeResult(
+            success=False,
+            error_type="SCRAPER_ERROR",
+            error_message="Apify scraping failed.",
+            error_details=f"{str(e)} | {error_trace[:500]}",
+        )
+
+
 async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
     """
-    Scrape a vehicle listing.
+    Scrape a vehicle listing with direct HTTP (primary) and Apify fallback.
+
+    Strategy:
+    1. Try direct HTTP scraping first (fast, free)
+    2. If direct fails (except LISTING_OFFLINE), fall back to Apify
+    3. LISTING_OFFLINE errors don't trigger fallback (listing truly offline)
 
     Args:
         url: URL of the listing
@@ -734,90 +1422,64 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
             error_message="Could not extract listing ID from URL.",
         )
 
-    try:
-        if source == "mobile.de":
-            actor_id = APIFY_ACTORS["mobile_de"]
-            # Normalize the URL to standard German format (handles /nl/, /fr/, /en/ versions)
-            normalized_url = normalize_mobile_de_url(url)
-            url_was_normalized = normalized_url != url
-            # The rental version (3x1t~mobile-de-scraper) requires searchPageURLs parameter
-            # and works best with auto-inserat URL format
-            input_data = {
-                "automaticPaging": True,
-                "searchCategory": "Car",
-                "searchPageURLMaxItems": 1,
-                "searchPageURLs": [normalized_url],
-            }
-            print(f"[MOBILE.DE] Using actor: {actor_id}")
-            print(f"[MOBILE.DE] Original URL: {url}")
-            print(f"[MOBILE.DE] Normalized URL: {normalized_url}")
-            print(f"[MOBILE.DE] URL was normalized: {url_was_normalized}")
-            print(f"[MOBILE.DE] Input data: {input_data}")
-            results = await run_apify_actor(actor_id, input_data, apify_token)
+    # Import USE_DIRECT_SCRAPING flag
+    from constants import USE_DIRECT_SCRAPING
 
-            if not results:
-                return ScrapeResult(
-                    success=False,
-                    error_type="LISTING_OFFLINE",
-                    error_message="Listing not found or no longer available.",
-                )
+    if source == "mobile.de":
+        # Try direct scraping first (if enabled)
+        if USE_DIRECT_SCRAPING:
+            print("[SCRAPER] Trying mobile.de direct HTTP scraping...")
+            result = await scrape_mobile_de_direct(url)
 
-            vehicle = parse_mobile_de_result(results[0], normalized_url)
-            # Store original URL if it was normalized
-            if url_was_normalized:
-                vehicle.original_url = url
+            # If successful, return immediately
+            if result.success:
+                print("[SCRAPER] Direct scraping SUCCESS")
+                return result
 
-        else:  # autoscout24
-            actor_id = APIFY_ACTORS["autoscout24"]
-            # Clean the URL - remove tracking parameters
-            clean_url = clean_autoscout24_url(url)
-            # 3x1t~autoscout24-scraper-ppr expects startUrls as array of STRINGS (not objects!)
-            input_data = {
-                "startUrls": [clean_url],
-                "maxItems": 1,
-            }
-            print(f"[AUTOSCOUT24] Using actor: {actor_id}")
-            print(f"[AUTOSCOUT24] Clean URL: {clean_url}")
-            print(f"[AUTOSCOUT24] Input data: {input_data}")
-            results = await run_apify_actor(actor_id, input_data, apify_token)
+            # If listing is offline, don't fallback (it's truly gone)
+            if result.error_type == "LISTING_OFFLINE":
+                print("[SCRAPER] Listing offline, no fallback")
+                return result
 
-            if not results:
-                return ScrapeResult(
-                    success=False,
-                    error_type="LISTING_OFFLINE",
-                    error_message="Listing not found or no longer available.",
-                )
+            # Otherwise, try Apify fallback
+            print(f"[SCRAPER] Direct scraping failed ({result.error_type}), trying Apify fallback...")
+        else:
+            print("[SCRAPER] Direct scraping disabled, using Apify only")
 
-            vehicle = parse_autoscout24_result(results[0], clean_url)
+        # Apify fallback
+        result = await scrape_mobile_de_apify(url, apify_token)
+        return result
 
-        # Validate we got real data
-        if vehicle.price_eur == 0:
-            return ScrapeResult(
-                success=False,
-                error_type="LISTING_SOLD",
-                error_message="Listing appears to be sold or price not available.",
-            )
+    elif source == "autoscout24":
+        # Try direct scraping first (if enabled)
+        if USE_DIRECT_SCRAPING:
+            print("[SCRAPER] Trying AutoScout24.de direct HTTP scraping...")
+            result = await scrape_autoscout24_de_direct(url)
 
-        return ScrapeResult(success=True, data=vehicle)
+            # If successful, return immediately
+            if result.success:
+                print("[SCRAPER] Direct scraping SUCCESS")
+                return result
 
-    except TimeoutError as e:
+            # If listing is offline, don't fallback (it's truly gone)
+            if result.error_type == "LISTING_OFFLINE":
+                print("[SCRAPER] Listing offline, no fallback")
+                return result
+
+            # Otherwise, try Apify fallback
+            print(f"[SCRAPER] Direct scraping failed ({result.error_type}), trying Apify fallback...")
+        else:
+            print("[SCRAPER] Direct scraping disabled, using Apify only")
+
+        # Apify fallback
+        result = await scrape_autoscout24_de_apify(url, apify_token)
+        return result
+
+    else:
         return ScrapeResult(
             success=False,
-            error_type="SCRAPER_TIMEOUT",
-            error_message="Scraper timed out. Please try again.",
-            error_details=str(e),
-        )
-    except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        print(f"[SCRAPER_ERROR] Source: {source}, URL: {url}")
-        print(f"[SCRAPER_ERROR] Exception: {e}")
-        print(f"[SCRAPER_ERROR] Traceback: {error_trace}")
-        return ScrapeResult(
-            success=False,
-            error_type="SCRAPER_ERROR",
-            error_message=f"Failed to scrape listing from {source}.",
-            error_details=f"{str(e)} | {error_trace[:500]}",
+            error_type="INVALID_URL",
+            error_message=f"Unknown source: {source}",
         )
 
 

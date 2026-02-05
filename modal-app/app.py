@@ -22,10 +22,12 @@ image = (
     .pip_install("httpx", "fastapi[standard]")
     .add_local_file("constants.py", "/root/constants.py")
     .add_local_file("utils.py", "/root/utils.py")
+    .add_local_file("user_agents.py", "/root/user_agents.py")
     .add_local_file("bpm_calculator.py", "/root/bpm_calculator.py")
     .add_local_file("scrapers.py", "/root/scrapers.py")
     .add_local_file("dutch_market.py", "/root/dutch_market.py")
     .add_local_file("valuation.py", "/root/valuation.py")
+    .add_local_file("pricing_model.py", "/root/pricing_model.py")
 )
 
 # =============================================================================
@@ -95,18 +97,19 @@ async def scrape_vehicle_fn(url: str) -> dict:
 @app.function(
     image=image,
     secrets=[apify_secret],
-    timeout=90,
+    timeout=120,  # Increased timeout for progressive search
 )
 async def search_dutch_market_fn(vehicle_data: dict) -> dict:
     """
-    Search the Dutch market for comparable vehicles.
-    Searches both AutoScout24 NL and Marktplaats.
-    Returns list of comparables as dictionaries.
+    Search the Dutch market for comparable vehicles using progressive search.
+    Starts with ±1 year, expands to ±5 years if needed to find minimum 5 comparables.
+    Returns list of comparables with normalized pricing.
     """
     import os
     from datetime import datetime
     from scrapers import VehicleData
-    from dutch_market import search_dutch_market, comparable_to_dict, get_market_stats, market_stats_to_dict
+    from dutch_market import search_dutch_market_progressive, comparable_to_dict, get_market_stats, market_stats_to_dict
+    from pricing_model import score_and_normalize_comparables, calculate_market_value
 
     apify_token = os.environ.get("APIFY_TOKEN")
 
@@ -128,16 +131,58 @@ async def search_dutch_market_fn(vehicle_data: dict) -> dict:
         attributes=vehicle_data.get("attributes", {}),
     )
 
-    comparables = await search_dutch_market(vehicle, apify_token)
+    # Use progressive search to find enough comparables
+    comparables = await search_dutch_market_progressive(
+        vehicle,
+        apify_token,
+        min_comparables=5,
+        max_year_delta=5,
+    )
+
+    # Convert to dict format for pricing model
+    comparables_dict = [comparable_to_dict(c) for c in comparables]
+
+    # Extract equipment from vehicle attributes if available
+    target_equipment = vehicle.features or []
+    if isinstance(vehicle.attributes, dict):
+        equipment_data = vehicle.attributes.get("equipment", {})
+        if isinstance(equipment_data, dict):
+            for category in equipment_data.values():
+                if isinstance(category, list):
+                    target_equipment.extend([
+                        item.get("id", "") if isinstance(item, dict) else item
+                        for item in category
+                    ])
+
+    # Score and normalize comparables
+    scored_comparables = score_and_normalize_comparables(
+        target_year=vehicle.year,
+        target_mileage=vehicle.mileage_km,
+        target_equipment=target_equipment,
+        comparables=comparables_dict,
+        min_comparables=5,
+    )
+
+    # Calculate advanced market value
+    market_value_data = calculate_market_value(scored_comparables)
+
     stats = get_market_stats(comparables)
 
     # Get unique sources
     sources = list(set(c.source for c in comparables))
 
     return {
-        "comparables": [comparable_to_dict(c) for c in comparables],
+        "comparables": comparables_dict,
         "stats": market_stats_to_dict(stats),
         "sources": sources,
+        "advancedPricing": {
+            "estimatedValue": market_value_data["estimated_value"],
+            "valueRange": market_value_data["value_range"],
+            "confidence": market_value_data["confidence"],
+            "comparablesUsed": market_value_data["comparables_used"],
+            "depreciationRate": market_value_data["depreciation_rate"],
+            "equipmentAdjustment": market_value_data.get("equipment_adjustment", 0),
+        },
     }
 
 
@@ -273,8 +318,22 @@ def calculate_import_margin(url: str) -> dict:
     import_costs = TOTAL_DEFAULT_IMPORT_COSTS
     total_cost = german_price + rest_bpm + import_costs
 
-    retail_price = valuation_result["estimatedRetailPrice"]
-    quick_sale_price = valuation_result["estimatedQuickSalePrice"]
+    # Use advanced pricing if available, otherwise fall back to AI valuation
+    if market_result.get("advancedPricing"):
+        advanced_pricing = market_result["advancedPricing"]
+        retail_price = advanced_pricing["estimatedValue"]
+        quick_sale_price = advanced_pricing["valueRange"]["low"]
+
+        print(f"[PRICING] Using advanced pricing model:")
+        print(f"  - Estimated value: €{retail_price:,}")
+        print(f"  - Confidence: {advanced_pricing['confidence']}")
+        print(f"  - Depreciation rate: {advanced_pricing['depreciationRate']}%/year")
+        print(f"  - Equipment adjustment: €{advanced_pricing['equipmentAdjustment']:,}")
+    else:
+        # Fallback to AI valuation
+        retail_price = valuation_result["estimatedRetailPrice"]
+        quick_sale_price = valuation_result["estimatedQuickSalePrice"]
+        print(f"[PRICING] Using AI valuation fallback: €{retail_price:,}")
 
     margin = retail_price - total_cost
     safe_margin = quick_sale_price - total_cost
@@ -284,7 +343,7 @@ def calculate_import_margin(url: str) -> dict:
 
     processing_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
-    return {
+    response_data = {
         "success": True,
         "requestId": request_id,
         "data": {
@@ -326,6 +385,12 @@ def calculate_import_margin(url: str) -> dict:
             "processingTimeMs": processing_time_ms,
         },
     }
+
+    # Add advanced pricing data if available
+    if market_result.get("advancedPricing"):
+        response_data["data"]["advancedPricing"] = market_result["advancedPricing"]
+
+    return response_data
 
 
 # =============================================================================
