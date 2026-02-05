@@ -76,6 +76,15 @@ interface ComparableVehicle {
   source?: string
 }
 
+interface AdvancedPricing {
+  estimatedValue: number
+  valueRange: { low: number; high: number }
+  confidence: number
+  comparablesUsed: number
+  depreciationRate: number
+  equipmentAdjustment: number
+}
+
 interface AnalysisResult {
   success: boolean
   requestId?: string
@@ -94,6 +103,7 @@ interface AnalysisResult {
     aiValuation: AIValuation
     comparables: ComparableVehicle[]
     marketStats: { count: number; avgPrice: number; minPrice: number; maxPrice: number }
+    advancedPricing?: AdvancedPricing
   }
   error?: { type: string; message: string; details?: string }
   meta?: { calculatedAt: string; processingTimeMs: number }
@@ -343,8 +353,62 @@ export default function Home() {
                   </div>
                 </div>
 
+                {result.data.advancedPricing && (
+                  <div className="card bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200">
+                    <h3 className="font-semibold text-lg mb-4 flex items-center gap-2">
+                      <span className="text-blue-600">🎯</span> Geavanceerde Marktanalyse
+                    </h3>
+                    <div className="space-y-3">
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Geschatte marktwaarde</span>
+                        <span className="font-bold text-lg">{formatCurrency(result.data.advancedPricing.estimatedValue)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Waarderange</span>
+                        <span className="font-medium">
+                          {formatCurrency(result.data.advancedPricing.valueRange.low)} - {formatCurrency(result.data.advancedPricing.valueRange.high)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Betrouwbaarheid</span>
+                        <span className="font-medium">
+                          {(result.data.advancedPricing.confidence * 100).toFixed(0)}%
+                          <span className="ml-2">
+                            {result.data.advancedPricing.confidence >= 0.8 ? '🟢' : result.data.advancedPricing.confidence >= 0.6 ? '🟡' : '🟠'}
+                          </span>
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Afschrijving per jaar</span>
+                        <span className="font-medium">{result.data.advancedPricing.depreciationRate}%</span>
+                      </div>
+                      {result.data.advancedPricing.equipmentAdjustment !== 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-600">Uitrusting correctie</span>
+                          <span className={`font-medium ${result.data.advancedPricing.equipmentAdjustment >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {result.data.advancedPricing.equipmentAdjustment >= 0 ? '+' : ''}{formatCurrency(result.data.advancedPricing.equipmentAdjustment)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="mt-3 pt-3 border-t border-blue-200">
+                        <p className="text-xs text-slate-500">
+                          Gebaseerd op {result.data.advancedPricing.comparablesUsed} vergelijkbare auto's met jaar- en kilometerstand normalisatie
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="card">
-                  <h3 className="font-semibold text-lg mb-4">Nederlandse Marktwaarde</h3>
+                  <h3 className="font-semibold text-lg mb-4 flex items-center justify-between">
+                    <span>Nederlandse Marktwaarde</span>
+                    {result.data.advancedPricing && (
+                      <span className="text-xs font-normal bg-blue-100 text-blue-700 px-2 py-1 rounded">Geavanceerd model</span>
+                    )}
+                    {!result.data.advancedPricing && result.data.aiValuation && (
+                      <span className="text-xs font-normal bg-purple-100 text-purple-700 px-2 py-1 rounded">AI taxatie</span>
+                    )}
+                  </h3>
                   <div className="space-y-3">
                     <div className="flex justify-between"><span className="text-slate-600">Geschatte retailprijs</span><span className="font-medium">{formatCurrency(result.data.pricing.dutchMarketValue)}</span></div>
                     <div className="flex justify-between"><span className="text-slate-600">Snelle verkoop prijs</span><span className="font-medium">{formatCurrency(result.data.pricing.dutchMarketValueRange.low)}</span></div>
@@ -463,22 +527,38 @@ export default function Home() {
                       Vergelijkbare auto's ({result.data.comparables.length})
                       {result.data.pricing.sources && result.data.pricing.sources.length > 0 && (
                         <span className="text-xs font-normal text-slate-500 ml-2">
-                          via {result.data.pricing.sources.map(s => s === 'autoscout24' ? 'AutoScout24' : s === 'marktplaats' ? 'Marktplaats' : s).join(' + ')}
+                          via {result.data.pricing.sources.map(s =>
+                            s === 'autoscout24' ? 'AutoScout24' :
+                            s === 'marktplaats' ? 'Marktplaats' :
+                            s === 'autotrack' ? 'AutoTrack' :
+                            s === 'gaspedaal' ? 'Gaspedaal' :
+                            s === 'occasions' ? 'Occasions.nl' :
+                            s
+                          ).join(' + ')}
                         </span>
                       )}
                     </h3>
                     <div className="space-y-3 max-h-64 overflow-y-auto">
                       {result.data.comparables.slice(0, 10).map((comp, index) => (
-                        <div key={index} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
+                        <div key={index} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors">
                           <div className="flex-1 min-w-0">
                             <p className="font-medium text-sm truncate">{comp.title}</p>
                             <p className="text-xs text-slate-500">
+                              {comp.year && `${comp.year} • `}
                               {formatNumber(comp.mileage_km)} km
                               {comp.location && ` • ${comp.location}`}
                               <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${
-                                comp.source === 'marktplaats' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                                comp.source === 'marktplaats' ? 'bg-orange-100 text-orange-700' :
+                                comp.source === 'autotrack' ? 'bg-green-100 text-green-700' :
+                                comp.source === 'gaspedaal' ? 'bg-purple-100 text-purple-700' :
+                                comp.source === 'occasions' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-blue-100 text-blue-700'
                               }`}>
-                                {comp.source === 'marktplaats' ? 'MP' : 'AS24'}
+                                {comp.source === 'marktplaats' ? 'MP' :
+                                 comp.source === 'autotrack' ? 'AT' :
+                                 comp.source === 'gaspedaal' ? 'GP' :
+                                 comp.source === 'occasions' ? 'OC' :
+                                 'AS24'}
                               </span>
                             </p>
                           </div>
