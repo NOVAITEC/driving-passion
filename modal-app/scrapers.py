@@ -57,22 +57,17 @@ def detect_source(url: str) -> str:
     url_lower = url.lower()
     if "mobile.de" in url_lower or "suchen.mobile.de" in url_lower:
         return "mobile.de"
-    # AutoScout24 - ONLY support German version (.de)
-    # Dutch version (.nl) is used for searching comparable cars, not as import source
+    # AutoScout24 - support all domains (.de, .nl, .be, .com)
+    # Note: .nl/.be URLs are supported if the vehicle is located in Germany
+    # User should verify the vehicle location is in Germany before importing
     if any(domain in url_lower for domain in [
         "autoscout24.de",
-        "autoscout24.com/de",  # International site, German section
-        "www.autoscout24.de",
-    ]):
-        return "autoscout24"
-    # Reject Dutch AutoScout24 URLs explicitly
-    if any(domain in url_lower for domain in [
         "autoscout24.nl",
         "autoscout24.be",
-        "autoscout24.com/nl",
-        "www.autoscout24.nl",
+        "autoscout24.com",
+        "www.autoscout24",
     ]):
-        return "autoscout24.nl"  # Mark as Dutch to handle separately
+        return "autoscout24"
     return "unknown"
 
 
@@ -1412,19 +1407,11 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
     """
     source = detect_source(url)
 
-    if source == "autoscout24.nl":
-        return ScrapeResult(
-            success=False,
-            error_type="INVALID_URL",
-            error_message="Nederlandse AutoScout24 advertenties worden niet ondersteund. Deze calculator is alleen voor Duitse advertenties die je naar Nederland wilt importeren.",
-            error_details="Ga naar autoscout24.de om Duitse advertenties te bekijken.",
-        )
-
     if source == "unknown":
         return ScrapeResult(
             success=False,
             error_type="INVALID_URL",
-            error_message="URL not supported. Use mobile.de or AutoScout24.de (German listings only).",
+            error_message="URL not supported. Use mobile.de or AutoScout24 (any domain).",
         )
 
     listing_id = extract_listing_id(url, source)

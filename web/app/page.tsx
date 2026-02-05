@@ -128,7 +128,7 @@ export default function Home() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!url.trim()) {
-      setError('Vul een Duitse advertentie URL in van mobile.de of autoscout24.de')
+      setError('Vul een advertentie URL in van mobile.de of AutoScout24')
       return
     }
 
@@ -211,13 +211,13 @@ export default function Home() {
                   id="url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://www.mobile.de/... of https://www.autoscout24.de/..."
+                  placeholder="https://www.mobile.de/... of https://www.autoscout24.de/.../nl/..."
                   className="input-field"
                   disabled={isLoading}
                 />
                 <p className="mt-2 text-sm text-slate-500">
-                  <strong>Let op:</strong> Alleen Duitse advertenties (mobile.de en autoscout24.de).
-                  <br />Nederlandse advertenties (autoscout24.nl) worden niet ondersteund.
+                  <strong>Let op:</strong> De auto moet in Duitsland staan om geïmporteerd te kunnen worden.
+                  <br />AutoScout24 URLs (.de, .nl, .be) worden ondersteund.
                 </p>
               </div>
               <button type="submit" disabled={isLoading || !url.trim()} className="btn-primary">
@@ -273,15 +273,15 @@ export default function Home() {
                   rel="noopener noreferrer"
                   className="text-sm text-primary-600 hover:text-primary-700 underline text-left"
                 >
-                  autoscout24.de - Zoek een Duitse advertentie
+                  autoscout24.de - Zoek een advertentie
                 </a>
                 <a
-                  href="https://www.autoscout24.de/lst"
+                  href="https://www.autoscout24.nl/lst"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-emerald-600 hover:text-emerald-700 underline text-left"
+                  className="text-sm text-primary-600 hover:text-primary-700 underline text-left"
                 >
-                  autoscout24.de - Zoek een Duitse advertentie (aangeraden) →
+                  autoscout24.nl - Zoek een advertentie (ook auto's uit Duitsland)
                 </a>
               </div>
             </div>
