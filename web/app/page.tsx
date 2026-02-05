@@ -128,7 +128,7 @@ export default function Home() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!url.trim()) {
-      setError('Vul een URL in van mobile.de of autoscout24')
+      setError('Vul een Duitse advertentie URL in van mobile.de of autoscout24.de')
       return
     }
 
@@ -211,11 +211,14 @@ export default function Home() {
                   id="url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://www.mobile.de/... of https://www.autoscout24.de/.../nl/..."
+                  placeholder="https://www.mobile.de/... of https://www.autoscout24.de/..."
                   className="input-field"
                   disabled={isLoading}
                 />
-                <p className="mt-2 text-sm text-slate-500">Ondersteund: mobile.de en autoscout24 (zowel .de als .nl)</p>
+                <p className="mt-2 text-sm text-slate-500">
+                  <strong>Let op:</strong> Alleen Duitse advertenties (mobile.de en autoscout24.de).
+                  <br />Nederlandse advertenties (autoscout24.nl) worden niet ondersteund.
+                </p>
               </div>
               <button type="submit" disabled={isLoading || !url.trim()} className="btn-primary">
                 {isLoading ? 'Analyseren...' : 'Analyseer Advertentie'}
@@ -273,12 +276,12 @@ export default function Home() {
                   autoscout24.de - Zoek een Duitse advertentie
                 </a>
                 <a
-                  href="https://www.autoscout24.nl/lst"
+                  href="https://www.autoscout24.de/lst"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-primary-600 hover:text-primary-700 underline text-left"
+                  className="text-sm text-emerald-600 hover:text-emerald-700 underline text-left"
                 >
-                  autoscout24.nl - Zoek een Nederlandse advertentie
+                  autoscout24.de - Zoek een Duitse advertentie (aangeraden) →
                 </a>
               </div>
             </div>

@@ -57,16 +57,22 @@ def detect_source(url: str) -> str:
     url_lower = url.lower()
     if "mobile.de" in url_lower or "suchen.mobile.de" in url_lower:
         return "mobile.de"
-    # AutoScout24 - support both German (.de) and Dutch (.nl) versions
+    # AutoScout24 - ONLY support German version (.de)
+    # Dutch version (.nl) is used for searching comparable cars, not as import source
     if any(domain in url_lower for domain in [
         "autoscout24.de",
-        "autoscout24.nl",
         "autoscout24.com/de",  # International site, German section
-        "autoscout24.com/nl",  # International site, Dutch section
         "www.autoscout24.de",
-        "www.autoscout24.nl",
     ]):
         return "autoscout24"
+    # Reject Dutch AutoScout24 URLs explicitly
+    if any(domain in url_lower for domain in [
+        "autoscout24.nl",
+        "autoscout24.be",
+        "autoscout24.com/nl",
+        "www.autoscout24.nl",
+    ]):
+        return "autoscout24.nl"  # Mark as Dutch to handle separately
     return "unknown"
 
 
@@ -1406,11 +1412,19 @@ async def scrape_vehicle(url: str, apify_token: str) -> ScrapeResult:
     """
     source = detect_source(url)
 
+    if source == "autoscout24.nl":
+        return ScrapeResult(
+            success=False,
+            error_type="INVALID_URL",
+            error_message="Nederlandse AutoScout24 advertenties worden niet ondersteund. Deze calculator is alleen voor Duitse advertenties die je naar Nederland wilt importeren.",
+            error_details="Ga naar autoscout24.de om Duitse advertenties te bekijken.",
+        )
+
     if source == "unknown":
         return ScrapeResult(
             success=False,
             error_type="INVALID_URL",
-            error_message="URL not supported. Use mobile.de or AutoScout24.",
+            error_message="URL not supported. Use mobile.de or AutoScout24.de (German listings only).",
         )
 
     listing_id = extract_listing_id(url, source)
