@@ -535,7 +535,7 @@ export default function Home() {
                       <span className="font-semibold">Te betalen BPM</span>
                       <span className="font-bold">{formatCurrency(result.data.bpm.restBPM)}</span>
                     </div>
-                    {result.data.bpm.regimeSavings > 0 && (
+                    {(result.data.bpm.regimeSavings ?? 0) > 0 && (
                       <div className="flex justify-between text-green-600">
                         <span>Besparing t.o.v. 2026 regime</span>
                         <span className="font-medium">{formatCurrency(result.data.bpm.regimeSavings)}</span>
