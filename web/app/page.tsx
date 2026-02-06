@@ -511,6 +511,15 @@ export default function Home() {
                 <div className="card">
                   <h3 className="font-semibold text-lg mb-4">BPM Berekening</h3>
                   <div className="space-y-3 text-sm">
+                    {result.data.bpm.regimeYear && result.data.bpm.regimeYear !== 2026 && (
+                      <div className="flex justify-between items-center bg-green-50 -mx-1 px-2 py-1.5 rounded">
+                        <span className="text-green-700 font-medium">Optimaal regime</span>
+                        <span className="text-green-700 font-medium">
+                          {result.data.bpm.regimeLabel || result.data.bpm.regimeYear}
+                          {result.data.bpm.regimeVerified === false && <span className="text-xs text-green-500 ml-1">(geschat)</span>}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between"><span className="text-slate-600">Bruto BPM (nieuw)</span><span className="font-medium">{formatCurrency(result.data.bpm.grossBPM)}</span></div>
                     <div className="flex justify-between"><span className="text-slate-600">Leeftijd voertuig</span><span className="font-medium">{result.data.bpm.vehicleAgeMonths} maanden</span></div>
                     <div className="flex justify-between"><span className="text-slate-600">Afschrijving</span><span className="font-medium">{result.data.bpm.depreciationPercentage}%</span></div>
@@ -521,6 +530,17 @@ export default function Home() {
                       <span className="font-semibold">Te betalen BPM</span>
                       <span className="font-bold">{formatCurrency(result.data.bpm.restBPM)}</span>
                     </div>
+                    {result.data.bpm.regimeSavings > 0 && (
+                      <div className="flex justify-between text-green-600">
+                        <span>Besparing t.o.v. 2026 regime</span>
+                        <span className="font-medium">{formatCurrency(result.data.bpm.regimeSavings)}</span>
+                      </div>
+                    )}
+                    {result.data.bpm.preWltpNote && (
+                      <div className="mt-2 p-2 bg-amber-50 rounded text-xs text-amber-700">
+                        {result.data.bpm.preWltpNote}
+                      </div>
+                    )}
                   </div>
                 </div>
 

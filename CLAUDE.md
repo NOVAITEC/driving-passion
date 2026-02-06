@@ -21,7 +21,7 @@ De backend draait op **Modal** (modal.com). Dit is de primaire en enige actieve 
 - `modal-app/app.py` - Hoofdapplicatie en endpoints
 - `modal-app/constants.py` - Configuratie (BPM tarieven, Apify actors, AI model)
 - `modal-app/scrapers.py` - Scraping logica voor mobile.de en autoscout24.de
-- `modal-app/bpm_calculator.py` - BPM berekening (2026 tarieven)
+- `modal-app/bpm_calculator.py` - BPM berekening met keuzerecht (optimaal historisch regime)
 - `modal-app/dutch_market.py` - Nederlandse markt zoeken
 - `modal-app/valuation.py` - AI taxatie via OpenRouter
 
@@ -120,9 +120,24 @@ Om de Marktplaats actor te gebruiken, ga naar https://apify.com/ivanvs/marktplaa
 - Provider: OpenRouter
 - Model: `anthropic/claude-sonnet-4`
 
-## BPM Tarieven
+## BPM Tarieven & Keuzerecht
 
-Gebaseerd op 2026 Belastingdienst forfaitaire tabel. Zie `modal-app/constants.py` voor alle tarieven.
+De BPM-calculator implementeert het **keuzerecht** (Artikel 110 VWEU): bij import mag de importeur kiezen welk belastingregime wordt toegepast, van de Datum Eerste Toelating (DET) tot de datum van aangifte. Het laagste tarief mag worden gekozen.
+
+**Geïmplementeerde regimes (WLTP):**
+- **2020 H2** (eerste WLTP jaar) - GEVERIFIEERD
+- **2021** - GESCHAT (geïnterpoleerd)
+- **2022** - GESCHAT (met data punt validatie)
+- **2023** - GESCHAT (geïnterpoleerd)
+- **2024** - GEVERIFIEERD (Belastingdienst/AutoRAI)
+- **2025** - GEVERIFIEERD (Belastingdienst/Promovendum)
+- **2026** - GEVERIFIEERD (Belastingdienst officieel)
+
+**EV-vrijstelling:** Auto's met DET vóór 2025 waren vrijgesteld van BPM. Via keuzerecht krijgen geïmporteerde EVs met DET vóór 2025 €0 BPM.
+
+**Pre-WLTP (NEDC):** Voor auto's met DET vóór juli 2020 wordt een melding getoond dat NEDC-regime mogelijk lagere BPM oplevert. NEDC-tarieven zijn niet geïmplementeerd (vereist NEDC CO2-waarde van CvO).
+
+**Configuratie:** Alle tarieven staan in `HISTORICAL_BPM_REGIMES` in `modal-app/constants.py`.
 
 ## Veelvoorkomende Problemen
 

@@ -1,10 +1,11 @@
 """
 Constants for the Driving Passion Auto Import Calculator.
 BPM rates based on 2026 Belastingdienst forfaitaire tabel.
+Includes historical regimes for keuzerecht (optimaal regime) berekening.
 """
 
 # =============================================================================
-# BPM 2026 TARIEVEN
+# BPM 2026 TARIEVEN (huidige regime)
 # =============================================================================
 
 # CO2 tarief schijven (g/km) - Officiële 2026 tarieven
@@ -26,6 +27,149 @@ CO2_BRACKETS = [
 DIESEL_SURCHARGE_RATE = 114.83
 DIESEL_SURCHARGE_THRESHOLD = 70  # Toeslag geldt bij CO2 > 70
 DIESEL_SURCHARGE_SUBTRACT = 69   # Maar de formule trekt 69 af
+
+# =============================================================================
+# HISTORISCHE BPM REGIMES (voor keuzerecht)
+# =============================================================================
+# Bij import mag de importeur kiezen welk belastingregime wordt toegepast:
+# - Het regime van de Datum Eerste Toelating (DET)
+# - Het regime van de Datum Aangifte (2026)
+# - Elk tussenliggend regime
+# Het laagste tarief mag worden gekozen (Artikel 110 VWEU).
+#
+# Formule per regime: (CO2 - threshold) * rate + base
+# base = cumulatieve BPM aan einde vorige schijf (= vaste voet voor schijf 1)
+#
+# Bronnen:
+# - 2026: Belastingdienst officieel (GEVERIFIEERD)
+# - 2025: Belastingdienst/Promovendum (GEVERIFIEERD)
+# - 2024: Belastingdienst/AutoRAI (GEVERIFIEERD)
+# - 2023: Geschat via autonome vergroening (GESCHAT)
+# - 2022: Geschat, gecorrigeerd met rijksfinancien data punt (GESCHAT)
+# - 2021: Geschat via interpolatie (GESCHAT)
+# - 2020: MrWheelson/Rijksoverheid - eerste WLTP jaar H2 (GEVERIFIEERD)
+
+HISTORICAL_BPM_REGIMES = [
+    {
+        "year": 2020,
+        "label": "2020 H2 (WLTP)",
+        "measurement": "WLTP",
+        "verified": True,
+        "ev_exempt": True,
+        "co2_brackets": [
+            {"min": 0, "max": 90, "threshold": 0, "rate": 1, "base": 366},
+            {"min": 91, "max": 116, "threshold": 90, "rate": 57, "base": 456},
+            {"min": 117, "max": 162, "threshold": 116, "rate": 124, "base": 1938},
+            {"min": 163, "max": 180, "threshold": 162, "rate": 204, "base": 7642},
+            {"min": 181, "max": float("inf"), "threshold": 180, "rate": 408, "base": 11314},
+        ],
+        "diesel_threshold": 59,
+        "diesel_subtract": 59,
+        "diesel_rate": 89.95,
+    },
+    {
+        "year": 2021,
+        "label": "2021 (WLTP)",
+        "measurement": "WLTP",
+        "verified": False,
+        "ev_exempt": True,
+        "co2_brackets": [
+            {"min": 0, "max": 88, "threshold": 0, "rate": 1, "base": 366},
+            {"min": 89, "max": 113, "threshold": 88, "rate": 59, "base": 454},
+            {"min": 114, "max": 158, "threshold": 113, "rate": 131, "base": 1929},
+            {"min": 159, "max": 175, "threshold": 158, "rate": 222, "base": 7824},
+            {"min": 176, "max": float("inf"), "threshold": 175, "rate": 443, "base": 11598},
+        ],
+        "diesel_threshold": 62,
+        "diesel_subtract": 62,
+        "diesel_rate": 93.0,
+    },
+    {
+        "year": 2022,
+        "label": "2022 (WLTP)",
+        "measurement": "WLTP",
+        "verified": False,
+        "ev_exempt": True,
+        "co2_brackets": [
+            {"min": 0, "max": 85, "threshold": 0, "rate": 2, "base": 366},
+            {"min": 86, "max": 109, "threshold": 85, "rate": 61, "base": 536},
+            {"min": 110, "max": 154, "threshold": 109, "rate": 137, "base": 2000},
+            {"min": 155, "max": 171, "threshold": 154, "rate": 239, "base": 8165},
+            {"min": 172, "max": float("inf"), "threshold": 171, "rate": 479, "base": 12228},
+        ],
+        "diesel_threshold": 65,
+        "diesel_subtract": 65,
+        "diesel_rate": 98.0,
+    },
+    {
+        "year": 2023,
+        "label": "2023 (WLTP)",
+        "measurement": "WLTP",
+        "verified": False,
+        "ev_exempt": True,
+        "co2_brackets": [
+            {"min": 0, "max": 83, "threshold": 0, "rate": 2, "base": 400},
+            {"min": 84, "max": 107, "threshold": 83, "rate": 71, "base": 566},
+            {"min": 108, "max": 149, "threshold": 107, "rate": 152, "base": 2270},
+            {"min": 150, "max": 166, "threshold": 149, "rate": 257, "base": 8654},
+            {"min": 167, "max": float("inf"), "threshold": 166, "rate": 514, "base": 13023},
+        ],
+        "diesel_threshold": 67,
+        "diesel_subtract": 67,
+        "diesel_rate": 102.0,
+    },
+    {
+        "year": 2024,
+        "label": "2024 (WLTP)",
+        "measurement": "WLTP",
+        "verified": True,
+        "ev_exempt": True,
+        "co2_brackets": [
+            {"min": 0, "max": 80, "threshold": 0, "rate": 2, "base": 440},
+            {"min": 81, "max": 104, "threshold": 80, "rate": 76, "base": 600},
+            {"min": 105, "max": 145, "threshold": 104, "rate": 167, "base": 2424},
+            {"min": 146, "max": 161, "threshold": 145, "rate": 274, "base": 9271},
+            {"min": 162, "max": float("inf"), "threshold": 161, "rate": 549, "base": 13655},
+        ],
+        "diesel_threshold": 70,
+        "diesel_subtract": 69,
+        "diesel_rate": 106.07,
+    },
+    {
+        "year": 2025,
+        "label": "2025 (WLTP)",
+        "measurement": "WLTP",
+        "verified": True,
+        "ev_exempt": False,
+        "co2_brackets": [
+            {"min": 0, "max": 79, "threshold": 0, "rate": 2, "base": 667},
+            {"min": 80, "max": 101, "threshold": 79, "rate": 79, "base": 825},
+            {"min": 102, "max": 141, "threshold": 101, "rate": 173, "base": 2563},
+            {"min": 142, "max": 157, "threshold": 141, "rate": 284, "base": 9483},
+            {"min": 158, "max": float("inf"), "threshold": 157, "rate": 568, "base": 14027},
+        ],
+        "diesel_threshold": 70,
+        "diesel_subtract": 69,
+        "diesel_rate": 109.87,
+    },
+    {
+        "year": 2026,
+        "label": "2026 (WLTP)",
+        "measurement": "WLTP",
+        "verified": True,
+        "ev_exempt": False,
+        "co2_brackets": [
+            {"min": 0, "max": 77, "threshold": 0, "rate": 2, "base": 687},
+            {"min": 78, "max": 100, "threshold": 77, "rate": 82, "base": 841},
+            {"min": 101, "max": 139, "threshold": 100, "rate": 181, "base": 2727},
+            {"min": 140, "max": 155, "threshold": 139, "rate": 297, "base": 9786},
+            {"min": 156, "max": float("inf"), "threshold": 155, "rate": 594, "base": 14538},
+        ],
+        "diesel_threshold": 70,
+        "diesel_subtract": 69,
+        "diesel_rate": 114.83,
+    },
+]
 
 # =============================================================================
 # FORFAITAIRE AFSCHRIJVINGSTABEL 2026
