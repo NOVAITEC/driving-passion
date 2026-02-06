@@ -538,7 +538,7 @@ export default function Home() {
                     {(result.data.bpm.regimeSavings ?? 0) > 0 && (
                       <div className="flex justify-between text-green-600">
                         <span>Besparing t.o.v. 2026 regime</span>
-                        <span className="font-medium">{formatCurrency(result.data.bpm.regimeSavings)}</span>
+                        <span className="font-medium">{formatCurrency(result.data.bpm.regimeSavings ?? 0)}</span>
                       </div>
                     )}
                     {result.data.bpm.preWltpNote && (
