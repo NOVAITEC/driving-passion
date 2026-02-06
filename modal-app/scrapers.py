@@ -684,8 +684,12 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
     if isinstance(mileage_val, (int, float)):
         mileage = int(mileage_val)
     else:
-        # Parse "75,948 km" -> 75948
-        mileage = int("".join(filter(str.isdigit, str(mileage_val))) or 0)
+        # Try float conversion first (handles "12499.0" correctly)
+        try:
+            mileage = int(float(str(mileage_val)))
+        except (ValueError, TypeError):
+            # Parse "75,948 km" -> 75948
+            mileage = int("".join(filter(str.isdigit, str(mileage_val))) or 0)
 
     # Get price - this one is tricky, the actor may return various formats
     # European format uses . as thousands separator and , as decimal
@@ -954,7 +958,11 @@ def _parse_autoscout24_direct(item: dict, url: str) -> VehicleData:
         mileage = int(mileage_raw)
     else:
         mileage_str = str(mileage_raw)
-        mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
+        # Try float conversion first (handles "12499.0" correctly)
+        try:
+            mileage = int(float(mileage_str))
+        except (ValueError, TypeError):
+            mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
 
     # First Registration - parse "11/2010" format
     first_reg_str = str(vehicle.get("firstRegistrationDate", ""))
@@ -1252,7 +1260,11 @@ def _parse_autoscout24_apify(item: dict, url: str) -> VehicleData:
         mileage = int(mileage_val)
     else:
         mileage_str = str(mileage_val)
-        mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
+        # Try float conversion first (handles "12499.0" correctly)
+        try:
+            mileage = int(float(mileage_str))
+        except (ValueError, TypeError):
+            mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
 
     # Get price - handle nested structure from 3x1t scraper: price.total.amount
     price = 0
