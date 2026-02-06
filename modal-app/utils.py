@@ -2,6 +2,8 @@
 Utility functions for the Driving Passion Auto Import Calculator.
 """
 
+import math
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -31,6 +33,9 @@ def normalize_fuel_type(fuel_type: str) -> str:
     """
     Normalize fuel type strings to standard values.
 
+    IMPORTANT: Hybrid/PHEV must be checked BEFORE petrol/diesel because
+    combined fuel strings like "Elektro/Benzine" contain both terms.
+
     Args:
         fuel_type: Raw fuel type string
 
@@ -39,24 +44,127 @@ def normalize_fuel_type(fuel_type: str) -> str:
     """
     fuel_lower = fuel_type.lower().strip()
 
-    diesel_terms = ['diesel', 'diesel (diesel)']
-    petrol_terms = ['petrol', 'benzine', 'gasoline', 'petrol (gasoline)']
-    electric_terms = ['electric', 'elektrisch', 'elektro', 'ev']
-    hybrid_terms = ['hybrid', 'hybride', 'plug-in hybrid', 'phev']
-    lpg_terms = ['lpg', 'gas', 'autogas']
+    # 1. Check hybrid/PHEV FIRST - these often contain petrol/diesel words
+    # e.g., "Elektro/Benzine", "Benzin/Elektro", "Hybrid (Petrol/Electric)"
+    hybrid_terms = ['hybrid', 'hybride', 'plug-in', 'phev', 'plugin',
+                    'plugin_hybrid', 'mild_hybrid', 'plug_in']
+    hybrid_combos = [
+        'elektro/benzin', 'benzin/elektro',
+        'elektro/diesel', 'diesel/elektro',
+        'electric/petrol', 'petrol/electric',
+        'electric/diesel', 'diesel/electric',
+        'benzine/elektro', 'elektro/benzine',
+        'gasoline/electric', 'electric/gasoline',
+    ]
 
-    if any(term in fuel_lower for term in diesel_terms):
-        return 'diesel'
-    if any(term in fuel_lower for term in petrol_terms):
-        return 'petrol'
-    if any(term in fuel_lower for term in electric_terms):
-        return 'electric'
     if any(term in fuel_lower for term in hybrid_terms):
         return 'hybrid'
+    if any(combo in fuel_lower for combo in hybrid_combos):
+        return 'hybrid'
+
+    # Also detect hybrid if both electric AND combustion terms appear
+    has_electric = any(t in fuel_lower for t in ['elektro', 'electric', 'elektrisch', 'electro'])
+    has_combustion = any(t in fuel_lower for t in ['benzin', 'diesel', 'petrol', 'gasoline', 'benzine'])
+    if has_electric and has_combustion:
+        return 'hybrid'
+
+    # 2. Check electric (pure EV) - must come after hybrid check
+    electric_terms = ['electric', 'elektrisch', 'elektro', 'ev', 'battery electric', 'bev', 'electro']
+    if any(term in fuel_lower for term in electric_terms):
+        return 'electric'
+
+    # 3. Check diesel
+    diesel_terms = ['diesel', 'diesel (diesel)']
+    if any(term in fuel_lower for term in diesel_terms):
+        return 'diesel'
+
+    # 4. Check petrol
+    petrol_terms = ['petrol', 'benzine', 'benzin', 'gasoline', 'petrol (gasoline)']
+    if any(term in fuel_lower for term in petrol_terms):
+        return 'petrol'
+
+    # 5. Check LPG
+    lpg_terms = ['lpg', 'gas', 'autogas']
     if any(term in fuel_lower for term in lpg_terms):
         return 'lpg'
 
     return 'petrol'  # Default to petrol if unknown
+
+
+def is_phev_model_name(model: str, make: str = "") -> bool:
+    """
+    Detect if a model name indicates a plug-in hybrid (PHEV).
+
+    Known PHEV indicators by brand:
+    - Audi: "TFSI e" (with space before 'e')
+    - BMW: model ending in "e" after number (330e, X3 30e, 745e)
+    - Mercedes: "EQ Power"
+    - VW: "GTE", "eHybrid"
+    - Volvo: "Recharge" (T6/T8)
+    - Porsche: "E-Hybrid"
+    - Generic: "PHEV", "Plug-in", "plug-in hybrid"
+    """
+    model_lower = model.lower()
+    make_lower = make.lower()
+
+    # Generic PHEV indicators
+    if any(term in model_lower for term in ['phev', 'plug-in', 'plugin']):
+        return True
+
+    # Audi: "TFSI e" (with space before 'e')
+    if 'tfsi e' in model_lower or 'tfsie' in model_lower:
+        return True
+
+    # BMW: models ending in 'e' after a number (e.g., "330e", "X3 30e", "745e")
+    if make_lower in ('bmw', ''):
+        if re.search(r'\d+e\b', model_lower):
+            return True
+
+    # VW: GTE, eHybrid
+    if any(term in model_lower for term in ['gte', 'ehybrid', 'e-hybrid']):
+        return True
+
+    # Mercedes: EQ Power
+    if 'eq power' in model_lower or 'eq-power' in model_lower:
+        return True
+
+    # Volvo: Recharge (T6/T8)
+    if make_lower in ('volvo', '') and 'recharge' in model_lower:
+        return True
+
+    # Porsche: E-Hybrid
+    if 'e-hybrid' in model_lower:
+        return True
+
+    # Mitsubishi: Outlander PHEV
+    if 'outlander' in model_lower and make_lower in ('mitsubishi', ''):
+        if 'phev' in model_lower:
+            return True
+
+    return False
+
+
+def estimate_phev_weighted_co2(co2_depleted: int, electric_range_km: int = 50) -> int:
+    """
+    Estimate the weighted combined CO2 for a PHEV using WLTP utility factor.
+
+    For BPM calculation in the Netherlands, the weighted combined CO2 is used.
+    This is significantly lower than the depleted battery (ICE-only) CO2.
+
+    Formula:
+        UF (Utility Factor) = 1 - e^(-0.0299 * electric_range_km)
+        CO2_weighted = (1 - UF) * CO2_depleted
+
+    Args:
+        co2_depleted: CO2 emissions with depleted battery (g/km)
+        electric_range_km: WLTP electric range in km (default 50 km, typical for PHEVs)
+
+    Returns:
+        Estimated weighted CO2 in g/km
+    """
+    uf = 1 - math.exp(-0.0299 * electric_range_km)
+    weighted = (1 - uf) * co2_depleted
+    return max(1, round(weighted))
 
 
 def normalize_transmission(transmission: str) -> str:

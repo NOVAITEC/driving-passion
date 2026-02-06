@@ -12,7 +12,7 @@ import re
 import json
 
 from constants import APIFY_ACTORS
-from utils import normalize_fuel_type, normalize_transmission
+from utils import normalize_fuel_type, normalize_transmission, is_phev_model_name, estimate_phev_weighted_co2
 from user_agents import get_random_headers
 
 
@@ -34,6 +34,8 @@ class VehicleData:
     features: list = None
     attributes: dict = None
     original_url: str = ""  # Original URL before normalization
+    is_phev: bool = False  # True if vehicle is a plug-in hybrid
+    co2_note: str = ""  # Note about CO2 data quality (e.g., estimated weighted CO2)
 
     def __post_init__(self):
         if self.features is None:
@@ -841,8 +843,19 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
             # Fallback: No displacement found, log available attributes for debugging
             print(f"[MOBILE.DE] No cubic capacity found. Available attributes: {list(attrs.keys())}")
 
+    # PHEV detection: check model name for known PHEV indicators
+    is_phev = False
+    co2_note = ""
+    if fuel_type == "hybrid":
+        is_phev = True
+    elif is_phev_model_name(model, make):
+        print(f"[MOBILE.DE] Detected PHEV from model name: {model}, overriding fuel to 'hybrid'")
+        fuel_type = "hybrid"
+        is_phev = True
+
     # Get CO2 - often not available, estimate based on engine
-    co2 = 150  # Default
+    default_co2 = {"petrol": 150, "diesel": 130, "electric": 0, "hybrid": 50, "lpg": 140}.get(fuel_type, 150)
+    co2 = default_co2
     power_str = get_attr(["Power", "power", "kW"])
     if power_str:
         # Parse "115 kW (156 hp)" -> estimate CO2 based on power
@@ -854,6 +867,11 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
                 co2 = min(250, max(100, int(kw * 1.0)))
             elif fuel_type == "electric":
                 co2 = 0
+            elif fuel_type == "hybrid":
+                # PHEV weighted CO2 is typically 30-60 g/km
+                co2 = 45
+                co2_note = "PHEV CO2 geschat op 45 g/km. Controleer de officiële gewogen CO2 voor exacte BPM."
+                print(f"[MOBILE.DE] Estimating PHEV weighted CO2: {co2} g/km")
             else:
                 co2 = min(300, max(100, int(kw * 1.3)))
 
@@ -875,6 +893,8 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
         title=title or f"{make} {model}",
         features=item.get("features", item.get("equipment", [])),
         attributes=attrs,
+        is_phev=is_phev,
+        co2_note=co2_note,
     )
 
 
@@ -959,27 +979,106 @@ def _parse_autoscout24_direct(item: dict, url: str) -> VehicleData:
     else:
         fuel_raw = fuel_category
     fuel_type = normalize_fuel_type(str(fuel_raw))
+    print(f"[AUTOSCOUT24.DE DIRECT] Fuel raw: {fuel_raw} → normalized: {fuel_type}")
+
+    # PHEV detection: also check model name for known PHEV indicators
+    # This catches cases where fuelCategory doesn't clearly indicate PHEV
+    is_phev = False
+    if fuel_type == "hybrid":
+        is_phev = True
+    elif is_phev_model_name(model, make):
+        print(f"[AUTOSCOUT24.DE DIRECT] Detected PHEV from model name: {model}, overriding fuel to 'hybrid'")
+        fuel_type = "hybrid"
+        is_phev = True
 
     # Transmission - from transmissionType (can be Dutch: "Handgeschakeld", "Automaat")
     trans_raw = vehicle.get("transmissionType", "automatic")
     transmission = normalize_transmission(str(trans_raw))
 
-    # CO2 - from co2emissionInGramPerKmWithFallback
-    co2 = 150 if fuel_type == "petrol" else 130  # Default
-    co2_data = vehicle.get("co2emissionInGramPerKmWithFallback", {})
-    if isinstance(co2_data, dict):
-        co2_raw = co2_data.get("raw")
-        if co2_raw and co2_raw != "None":
-            try:
-                co2 = int(co2_raw)
-                # Sanity check
-                if co2 < 50 or co2 > 400:
-                    co2 = 150 if fuel_type == "petrol" else 130
-            except:
-                pass
+    # CO2 handling - critical for correct BPM calculation
+    # For PHEVs, the weighted combined CO2 (WLTP) is needed, not the ICE-only value
+    co2 = 0
+    co2_note = ""
+    co2_found = False
 
-    # If CO2 not available, estimate from power
-    if co2 in [130, 150]:
+    # Default CO2 by fuel type
+    default_co2 = {
+        "petrol": 150, "diesel": 130, "electric": 0,
+        "hybrid": 50, "lpg": 140,
+    }.get(fuel_type, 150)
+
+    # Try weighted CO2 fields first (important for PHEVs)
+    for co2_field in ["rawCo2EmissionCombinedWeighted", "co2EmissionWeightedCombined",
+                       "co2EmissionWeighted", "rawCo2EmissionWeighted"]:
+        co2_weighted_data = vehicle.get(co2_field)
+        if co2_weighted_data:
+            raw_val = co2_weighted_data.get("raw") if isinstance(co2_weighted_data, dict) else co2_weighted_data
+            if raw_val and str(raw_val) != "None":
+                try:
+                    co2 = int(raw_val)
+                    if 0 <= co2 <= 400:
+                        co2_found = True
+                        print(f"[AUTOSCOUT24.DE DIRECT] Using weighted CO2 from {co2_field}: {co2}")
+                        break
+                except (ValueError, TypeError):
+                    pass
+
+    # Fallback to regular CO2 field
+    if not co2_found:
+        co2_data = vehicle.get("co2emissionInGramPerKmWithFallback", {})
+        if isinstance(co2_data, dict):
+            co2_raw = co2_data.get("raw")
+            if co2_raw and co2_raw != "None":
+                try:
+                    parsed_co2 = int(co2_raw)
+                    if 0 <= parsed_co2 <= 400:
+                        co2 = parsed_co2
+                        co2_found = True
+                except (ValueError, TypeError):
+                    pass
+
+    # Also try co2emissionInGramPerKm (without "WithFallback")
+    if not co2_found:
+        co2_alt = vehicle.get("co2emissionInGramPerKm", {})
+        if isinstance(co2_alt, dict):
+            raw_val = co2_alt.get("raw")
+            if raw_val and str(raw_val) != "None":
+                try:
+                    parsed_co2 = int(raw_val)
+                    if 0 <= parsed_co2 <= 400:
+                        co2 = parsed_co2
+                        co2_found = True
+                except (ValueError, TypeError):
+                    pass
+
+    # For PHEVs: check if CO2 is the non-weighted (ICE-only) value
+    # If CO2 > 100 for a PHEV, it's almost certainly NOT the weighted value
+    if is_phev and co2_found and co2 > 100:
+        co2_depleted = co2
+        # Try to get electric range for better estimation
+        electric_range = 50  # Default assumption for PHEVs
+        for range_field in ["rawElectricRange", "electricRange", "electricRangeInKm"]:
+            range_data = vehicle.get(range_field)
+            if range_data:
+                raw_val = range_data.get("raw") if isinstance(range_data, dict) else range_data
+                if raw_val and str(raw_val) != "None":
+                    try:
+                        electric_range = int(float(str(raw_val)))
+                        if electric_range > 0:
+                            print(f"[AUTOSCOUT24.DE DIRECT] Electric range from {range_field}: {electric_range} km")
+                            break
+                    except (ValueError, TypeError):
+                        pass
+
+        co2 = estimate_phev_weighted_co2(co2_depleted, electric_range)
+        co2_note = (f"PHEV gewogen CO2 geschat op {co2} g/km (WLTP utility factor, "
+                    f"bereik {electric_range} km, ICE-only {co2_depleted} g/km). "
+                    f"Controleer de officiële gewogen CO2 voor exacte BPM.")
+        print(f"[AUTOSCOUT24.DE DIRECT] PHEV: CO2 {co2_depleted} → weighted estimate {co2} g/km (range {electric_range} km)")
+
+    # If CO2 not available at all, estimate from power
+    if not co2_found:
+        co2 = default_co2
         power_kw_str = str(vehicle.get("powerInKw", ""))
         kw_digits = "".join(filter(str.isdigit, power_kw_str.split()[0] if power_kw_str.split() else power_kw_str))
         if kw_digits:
@@ -988,6 +1087,11 @@ def _parse_autoscout24_direct(item: dict, url: str) -> VehicleData:
                 co2 = min(250, max(100, int(kw * 1.0)))
             elif fuel_type == "electric":
                 co2 = 0
+            elif fuel_type == "hybrid":
+                # PHEV weighted CO2 is typically 30-60 g/km
+                co2 = 45
+                co2_note = "PHEV CO2 geschat op 45 g/km (geen exacte data beschikbaar). Controleer de officiële gewogen CO2 voor exacte BPM."
+                print(f"[AUTOSCOUT24.DE DIRECT] Estimating PHEV weighted CO2: {co2} g/km")
             else:
                 co2 = min(300, max(100, int(kw * 1.3)))
 
@@ -1016,6 +1120,8 @@ def _parse_autoscout24_direct(item: dict, url: str) -> VehicleData:
         title=title,
         features=features,
         attributes=vehicle,  # Store full vehicle dict as attributes
+        is_phev=is_phev,
+        co2_note=co2_note,
     )
 
 
@@ -1180,6 +1286,16 @@ def _parse_autoscout24_apify(item: dict, url: str) -> VehicleData:
         "fuelType", "fuel", "Fuel", "FuelType", "Kraftstoff"
     ]) or "petrol"
     fuel_type = normalize_fuel_type(str(fuel_raw))
+    print(f"[AUTOSCOUT24.DE APIFY] Fuel raw: {fuel_raw} → normalized: {fuel_type}")
+
+    # PHEV detection: also check model name for known PHEV indicators
+    is_phev = False
+    if fuel_type == "hybrid":
+        is_phev = True
+    elif is_phev_model_name(model, make):
+        print(f"[AUTOSCOUT24.DE APIFY] Detected PHEV from model name: {model}, overriding fuel to 'hybrid'")
+        fuel_type = "hybrid"
+        is_phev = True
 
     # Get transmission
     trans_raw = get_field([
@@ -1198,20 +1314,35 @@ def _parse_autoscout24_apify(item: dict, url: str) -> VehicleData:
             if "co2" in key.lower() or "co₂" in key.lower():
                 co2_val = attrs[key]
                 break
-    co2 = 150 if fuel_type == "petrol" else 130  # Default
+
+    co2 = 0
+    co2_note = ""
+    co2_found = False
+    default_co2 = {"petrol": 150, "diesel": 130, "electric": 0, "hybrid": 50, "lpg": 140}.get(fuel_type, 150)
+
     if co2_val:
         co2_str = str(co2_val)
         if co2_str and co2_str != "None":
             # Extract just the number from strings like "231 g/km (comb.)"
             digits = "".join(filter(str.isdigit, co2_str.split()[0] if co2_str.split() else co2_str))
             if digits:
-                co2 = int(digits)
-                # Sanity check
-                if co2 < 50 or co2 > 400:
-                    co2 = 150 if fuel_type == "petrol" else 130
+                parsed_co2 = int(digits)
+                if 0 <= parsed_co2 <= 400:
+                    co2 = parsed_co2
+                    co2_found = True
+
+    # For PHEVs: check if CO2 is the non-weighted (ICE-only) value
+    if is_phev and co2_found and co2 > 100:
+        co2_depleted = co2
+        co2 = estimate_phev_weighted_co2(co2_depleted, 50)
+        co2_note = (f"PHEV gewogen CO2 geschat op {co2} g/km (WLTP utility factor, "
+                    f"ICE-only {co2_depleted} g/km). "
+                    f"Controleer de officiële gewogen CO2 voor exacte BPM.")
+        print(f"[AUTOSCOUT24.DE APIFY] PHEV: CO2 {co2_depleted} → weighted estimate {co2} g/km")
 
     # Estimate CO2 from power if not available
-    if co2 in [130, 150]:  # Still default
+    if not co2_found:
+        co2 = default_co2
         power_val = get_field(["power", "kw", "powerKw", "Power", "Kw"])
         if power_val:
             kw_str = str(power_val)
@@ -1222,6 +1353,9 @@ def _parse_autoscout24_apify(item: dict, url: str) -> VehicleData:
                     co2 = min(250, max(100, int(kw * 1.0)))
                 elif fuel_type == "electric":
                     co2 = 0
+                elif fuel_type == "hybrid":
+                    co2 = 45
+                    co2_note = "PHEV CO2 geschat op 45 g/km (geen exacte data beschikbaar). Controleer de officiële gewogen CO2 voor exacte BPM."
                 else:
                     co2 = min(300, max(100, int(kw * 1.3)))
 
@@ -1243,6 +1377,8 @@ def _parse_autoscout24_apify(item: dict, url: str) -> VehicleData:
         title=title,
         features=item.get("features", item.get("equipment", [])),
         attributes=attrs if isinstance(attrs, dict) else {},
+        is_phev=is_phev,
+        co2_note=co2_note,
     )
 
 
@@ -1501,7 +1637,11 @@ def vehicle_to_dict(vehicle: VehicleData) -> dict:
         "title": vehicle.title,
         "features": vehicle.features,
         "attributes": vehicle.attributes,
+        "isPhev": vehicle.is_phev,
     }
+    # Include CO2 note for PHEVs (explains weighted CO2 estimation)
+    if vehicle.co2_note:
+        result["co2Note"] = vehicle.co2_note
     # Include original URL if the URL was normalized
     if vehicle.original_url:
         result["originalUrl"] = vehicle.original_url

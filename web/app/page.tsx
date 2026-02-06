@@ -25,6 +25,8 @@ interface BPMData {
   depreciationPercentage: number
   dieselSurcharge: number
   vehicleAgeMonths: number
+  regimeYear?: number
+  regimeLabel?: string
 }
 
 interface CostsData {
