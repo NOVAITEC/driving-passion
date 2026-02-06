@@ -27,6 +27,9 @@ interface BPMData {
   vehicleAgeMonths: number
   regimeYear?: number
   regimeLabel?: string
+  regimeVerified?: boolean
+  regimeSavings?: number
+  preWltpNote?: string
 }
 
 interface CostsData {
