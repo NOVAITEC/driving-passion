@@ -672,13 +672,17 @@ def parse_mobile_de_result(item: dict, url: str) -> VehicleData:
             pass
 
     # Get mileage from attributes - key is "Mileage"
-    mileage_str = (
+    # IMPORTANT: handle numeric types (float like 12499.0) before string conversion
+    mileage_val = (
         get_attr(["Mileage", "mileage", "km"]) or
         item.get("mileage") or
-        "0"
+        0
     )
-    # Parse "75,948 km" -> 75948
-    mileage = int("".join(filter(str.isdigit, str(mileage_str))) or 0)
+    if isinstance(mileage_val, (int, float)):
+        mileage = int(mileage_val)
+    else:
+        # Parse "75,948 km" -> 75948
+        mileage = int("".join(filter(str.isdigit, str(mileage_val))) or 0)
 
     # Get price - this one is tricky, the actor may return various formats
     # European format uses . as thousands separator and , as decimal
@@ -938,9 +942,16 @@ def _parse_autoscout24_direct(item: dict, url: str) -> VehicleData:
     if not price:
         price = prices.get("dealer", {}).get("priceRaw", 0) or 0
 
-    # Mileage - parse from "184.555 km" format
-    mileage_str = str(vehicle.get("mileageInKm", "0"))
-    mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
+    # Mileage - handle numeric (int/float), dict, and string formats
+    # IMPORTANT: float like 12499.0 → str gives "12499.0" → digit filter gives "124990" (WRONG!)
+    mileage_raw = vehicle.get("mileageInKm", 0)
+    if isinstance(mileage_raw, dict):
+        mileage_raw = mileage_raw.get("raw", 0)
+    if isinstance(mileage_raw, (int, float)):
+        mileage = int(mileage_raw)
+    else:
+        mileage_str = str(mileage_raw)
+        mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
 
     # First Registration - parse "11/2010" format
     first_reg_str = str(vehicle.get("firstRegistrationDate", ""))
@@ -1227,12 +1238,18 @@ def _parse_autoscout24_apify(item: dict, url: str) -> VehicleData:
             pass
 
     # Get mileage - try multiple field names
+    # IMPORTANT: handle numeric types (float like 12499.0) before string conversion
     mileage_val = get_field([
         "mileage", "km", "mileageInKm", "Mileage", "Km",
         "kilometerstand", "kilometers"
-    ]) or "0"
-    mileage_str = str(mileage_val)
-    mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
+    ]) or 0
+    if isinstance(mileage_val, dict):
+        mileage_val = mileage_val.get("raw", 0)
+    if isinstance(mileage_val, (int, float)):
+        mileage = int(mileage_val)
+    else:
+        mileage_str = str(mileage_val)
+        mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
 
     # Get price - handle nested structure from 3x1t scraper: price.total.amount
     price = 0
