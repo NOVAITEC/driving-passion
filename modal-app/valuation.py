@@ -75,6 +75,17 @@ def build_valuation_prompt(vehicle: VehicleData, comparables: list[DutchComparab
     else:
         features_text = "Geen specifieke opties bekend"
 
+    # Add PHEV context if applicable
+    phev_context = ""
+    if getattr(vehicle, 'is_phev', False):
+        phev_context = """
+BELANGRIJK - DIT IS EEN PLUG-IN HYBRIDE (PHEV):
+- Vergelijk ALLEEN met andere PHEV-versies van dit model, NIET met gewone benzine/diesel varianten
+- PHEVs hebben in Nederland fiscale voordelen (lagere bijtelling, lagere wegenbelasting)
+- De hogere nieuwprijs van PHEVs resulteert in hogere tweedehands waarde
+- Negeer vergelijkbare auto's die GEEN PHEV zijn (bijv. gewone TFSI, TDI varianten)
+"""
+
     prompt = f"""Je bent een expert auto-taxateur gespecialiseerd in de Nederlandse markt.
 
 DOELVOERTUIG:
@@ -83,10 +94,10 @@ DOELVOERTUIG:
 - Kilometerstand: {vehicle.mileage_km:,} km
 - Brandstof: {vehicle.fuel_type}
 - Transmissie: {vehicle.transmission}
-- CO2 uitstoot: {vehicle.co2_gkm} g/km
+- CO2 uitstoot: {vehicle.co2_gkm} g/km (gewogen waarde)
 - Eerste registratie: {vehicle.first_registration_date.strftime('%m/%Y')}
 - Duitse vraagprijs: €{vehicle.price_eur:,}
-
+{phev_context}
 OPTIES/UITRUSTING:
 {features_text}
 

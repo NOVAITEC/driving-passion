@@ -129,6 +129,8 @@ async def search_dutch_market_fn(vehicle_data: dict) -> dict:
         title=vehicle_data.get("title", ""),
         features=vehicle_data.get("features", []),
         attributes=vehicle_data.get("attributes", {}),
+        is_phev=vehicle_data.get("isPhev", False),
+        co2_note=vehicle_data.get("co2Note", ""),
     )
 
     # Use progressive search to find enough comparables
@@ -239,6 +241,8 @@ async def valuate_vehicle_fn(vehicle_data: dict, comparables: list[dict]) -> dic
         title=vehicle_data.get("title", ""),
         features=vehicle_data.get("features", []),
         attributes=vehicle_data.get("attributes", {}),
+        is_phev=vehicle_data.get("isPhev", False),
+        co2_note=vehicle_data.get("co2Note", ""),
     )
 
     # Reconstruct comparables
@@ -389,6 +393,15 @@ def calculate_import_margin(url: str) -> dict:
     # Add advanced pricing data if available
     if market_result.get("advancedPricing"):
         response_data["data"]["advancedPricing"] = market_result["advancedPricing"]
+
+    # Add PHEV note if applicable
+    if vehicle_data.get("isPhev"):
+        co2_note = vehicle_data.get("co2Note", "")
+        response_data["data"]["phevNote"] = (
+            co2_note or
+            "Dit is een plug-in hybride (PHEV). De gewogen CO2-uitstoot is gebruikt voor de BPM-berekening. "
+            "Controleer de officiële gewogen CO2-waarde voor een exacte BPM-berekening."
+        )
 
     return response_data
 
