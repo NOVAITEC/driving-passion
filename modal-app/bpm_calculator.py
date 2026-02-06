@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from constants import CO2_BRACKETS, DIESEL_SURCHARGE_RATE, DIESEL_SURCHARGE_THRESHOLD, DEPRECIATION_TABLE
+from constants import CO2_BRACKETS, DIESEL_SURCHARGE_RATE, DIESEL_SURCHARGE_THRESHOLD, DIESEL_SURCHARGE_SUBTRACT, DEPRECIATION_TABLE
 from utils import calculate_vehicle_age_months, normalize_fuel_type
 
 
@@ -26,6 +26,8 @@ class BPMResult:
 def calculate_gross_bpm(co2_gkm: int) -> float:
     """
     Calculate gross BPM based on CO2 emissions.
+    Official formula: BPM = (CO2 - threshold) * rate + base
+    Where threshold is "kolom 1" from the official Belastingdienst table.
 
     Args:
         co2_gkm: CO2 emissions in g/km
@@ -33,27 +35,24 @@ def calculate_gross_bpm(co2_gkm: int) -> float:
     Returns:
         Gross BPM amount in euros
     """
-    total_bpm = 0
-
+    # Find the correct bracket for this CO2 value
     for bracket in CO2_BRACKETS:
-        if co2_gkm >= bracket["min"]:
-            # Calculate grams in this bracket
-            bracket_max = min(co2_gkm, bracket["max"])
-            grams_in_bracket = bracket_max - bracket["min"] + 1
+        if bracket["min"] <= co2_gkm <= bracket["max"]:
+            # Formula: (CO2 - threshold) * rate + base
+            # threshold is the official "kolom 1" value from Belastingdienst
+            bpm = (co2_gkm - bracket["threshold"]) * bracket["rate"] + bracket["base"]
+            return round(bpm, 2)
 
-            if bracket["min"] == 0:
-                # First bracket is flat base amount
-                total_bpm = bracket["base"]
-            else:
-                # Add rate * grams for this bracket
-                total_bpm += grams_in_bracket * bracket["rate"]
-
-    return round(total_bpm, 2)
+    # If beyond all brackets, use the last bracket
+    last_bracket = CO2_BRACKETS[-1]
+    bpm = (co2_gkm - last_bracket["threshold"]) * last_bracket["rate"] + last_bracket["base"]
+    return round(bpm, 2)
 
 
 def calculate_diesel_surcharge(co2_gkm: int, fuel_type: str) -> float:
     """
     Calculate diesel surcharge if applicable.
+    Official formula: (CO2 - 69) × €114,83 for diesel cars with CO2 > 70 g/km
 
     Args:
         co2_gkm: CO2 emissions in g/km
@@ -68,25 +67,36 @@ def calculate_diesel_surcharge(co2_gkm: int, fuel_type: str) -> float:
     if co2_gkm <= DIESEL_SURCHARGE_THRESHOLD:
         return 0
 
-    excess_grams = co2_gkm - DIESEL_SURCHARGE_THRESHOLD
+    # Official formula subtracts 69, not the threshold (70)
+    excess_grams = co2_gkm - DIESEL_SURCHARGE_SUBTRACT
     return round(excess_grams * DIESEL_SURCHARGE_RATE, 2)
 
 
 def get_depreciation_percentage(age_months: int) -> float:
     """
     Get depreciation percentage from forfaitaire tabel.
+    Uses official method: base_percentage + (months_in_period * monthly_addition)
 
     Args:
         age_months: Vehicle age in months
 
     Returns:
-        Depreciation percentage (0-92)
+        Depreciation percentage (0-100)
     """
     for bracket in DEPRECIATION_TABLE:
         if bracket["min_months"] <= age_months <= bracket["max_months"]:
-            return bracket["percentage"]
+            # Calculate months within this bracket
+            months_in_bracket = age_months - bracket["min_months"]
 
-    return 92  # Maximum depreciation
+            # Calculate depreciation: base + (months * monthly_addition)
+            depreciation = bracket["base_percentage"] + (months_in_bracket * bracket["monthly_addition"])
+
+            # Cap at 100%
+            return min(depreciation, 100.0)
+
+    # If beyond all brackets, return maximum from last bracket
+    last_bracket = DEPRECIATION_TABLE[-1]
+    return min(last_bracket["base_percentage"] + (12 * last_bracket["monthly_addition"]), 100.0)
 
 
 def calculate_bpm(

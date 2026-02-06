@@ -19,7 +19,7 @@ app = modal.App("driving-passion")
 # Define the container image with all dependencies and local modules
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("httpx", "fastapi[standard]")
+    .pip_install("httpx", "fastapi[standard]", "curl_cffi")
     .add_local_file("constants.py", "/root/constants.py")
     .add_local_file("utils.py", "/root/utils.py")
     .add_local_file("user_agents.py", "/root/user_agents.py")

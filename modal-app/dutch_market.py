@@ -13,6 +13,41 @@ import asyncio
 from scrapers import VehicleData
 from utils import extract_model_variant
 from constants import APIFY_ACTORS
+from user_agents import get_random_headers, get_random_user_agent
+
+
+def _get_dutch_headers(referer: str = "") -> dict:
+    """Get randomized browser headers with Dutch language preference."""
+    headers = get_random_headers()
+    headers["Accept-Language"] = "nl-NL,nl;q=0.9,en;q=0.8"
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
+async def _curl_cffi_get(url: str, referer: str = "") -> str:
+    """
+    Fetch URL using curl_cffi which impersonates Chrome's TLS fingerprint.
+    Used for sites that block httpx via TLS fingerprinting (AutoTrack, Gaspedaal).
+    Returns response text or raises an exception.
+    """
+    from curl_cffi.requests import AsyncSession
+
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "max-age=0",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    if referer:
+        headers["Referer"] = referer
+
+    async with AsyncSession(impersonate="chrome") as session:
+        response = await session.get(url, headers=headers, allow_redirects=True, timeout=30)
+        if response.status_code != 200:
+            raise Exception(f"HTTP {response.status_code} for {url}")
+        return response.text
 
 
 @dataclass
@@ -92,12 +127,22 @@ def extract_base_model_name(model: str) -> str:
     return " ".join(base_parts) if base_parts else parts[0]
 
 
-def build_autoscout24_search_url(vehicle: VehicleData) -> str:
+def build_autoscout24_search_url(
+    vehicle: VehicleData,
+    year_delta: int = 1,
+    km_percent: float = 0.2,
+    include_fuel: bool = True,
+    include_transmission: bool = True
+) -> str:
     """
     Build AutoScout24 NL search URL for comparable vehicles.
 
     Args:
         vehicle: The target vehicle to find comparables for
+        year_delta: Year range (±N years)
+        km_percent: Mileage range as percentage (0.2 = ±20%)
+        include_fuel: Whether to filter by fuel type
+        include_transmission: Whether to filter by transmission
 
     Returns:
         Search URL string
@@ -106,9 +151,6 @@ def build_autoscout24_search_url(vehicle: VehicleData) -> str:
 
     # Normalize make for URL
     make = vehicle.make.lower().replace(" ", "-")
-
-    # Get full model with engine info for search query
-    full_model, variant = extract_model_variant(vehicle.model)
 
     # Extract just base model name for URL path (AutoScout24 doesn't accept engine specs in path)
     base_model_name = extract_base_model_name(vehicle.model)
@@ -120,40 +162,36 @@ def build_autoscout24_search_url(vehicle: VehicleData) -> str:
     # Build query parameters
     params = []
 
-    # Add search query with full model including engine variant for better matching
-    # This helps filter results to the specific engine size
-    if full_model != base_model_name:
-        # Include engine specs in search query
-        params.append(f"search={full_model.replace(' ', '+')}")
+    # Year range
+    params.append(f"fregfrom={vehicle.year - year_delta}")
+    params.append(f"fregto={vehicle.year + year_delta}")
 
-    # Year range: ±1 year
-    params.append(f"fregfrom={vehicle.year - 1}")
-    params.append(f"fregto={vehicle.year + 1}")
-
-    # Mileage range: ±20%
-    min_km = int(vehicle.mileage_km * 0.8)
-    max_km = int(vehicle.mileage_km * 1.2)
+    # Mileage range
+    min_km = int(vehicle.mileage_km * (1 - km_percent))
+    max_km = int(vehicle.mileage_km * (1 + km_percent))
     params.append(f"kmfrom={min_km}")
     params.append(f"kmto={max_km}")
 
-    # Fuel type mapping
-    fuel_map = {
-        "petrol": "B",
-        "diesel": "D",
-        "electric": "E",
-        "hybrid": "2",  # All hybrids
-        "lpg": "L",
-    }
-    if vehicle.fuel_type in fuel_map:
-        params.append(f"fuel={fuel_map[vehicle.fuel_type]}")
+    # Fuel type mapping (optional)
+    if include_fuel:
+        fuel_map = {
+            "petrol": "B",
+            "diesel": "D",
+            "electric": "E",
+            "hybrid": "2",
+            "lpg": "L",
+        }
+        if vehicle.fuel_type in fuel_map:
+            params.append(f"fuel={fuel_map[vehicle.fuel_type]}")
 
-    # Transmission mapping
-    trans_map = {
-        "automatic": "A",
-        "manual": "M",
-    }
-    if vehicle.transmission in trans_map:
-        params.append(f"gear={trans_map[vehicle.transmission]}")
+    # Transmission mapping (optional)
+    if include_transmission:
+        trans_map = {
+            "automatic": "A",
+            "manual": "M",
+        }
+        if vehicle.transmission in trans_map:
+            params.append(f"gear={trans_map[vehicle.transmission]}")
 
     # Sort by price
     params.append("sort=price")
@@ -164,7 +202,6 @@ def build_autoscout24_search_url(vehicle: VehicleData) -> str:
 
     query = "&".join(params)
     url = f"{base_url}{path}?{query}"
-    print(f"[AUTOSCOUT24 NL] Search URL: {url}")
     return url
 
 
@@ -290,8 +327,8 @@ def build_marktplaats_search_url(vehicle: VehicleData) -> str:
 
     base_url = f"https://www.marktplaats.nl/l/auto-s/{make_url}/"
 
-    # Get base model for search query - use full model for better matching
-    base_model, variant = extract_model_variant(vehicle.model)
+    # Get base model for search query (without body styles)
+    base_model = extract_base_model_name(vehicle.model)
 
     # Build query parameters
     params = []
@@ -377,8 +414,8 @@ async def search_marktplaats_via_apify(
 
             # Filter by make (case insensitive)
             make_lower = vehicle.make.lower()
-            # Get base model for matching
-            base_model, _ = extract_model_variant(vehicle.model)
+            # Get base model for matching (without body styles like "Sedan", "Wagon", etc.)
+            base_model = extract_base_model_name(vehicle.model)
             model_lower = base_model.lower()
 
             filtered = []
@@ -388,38 +425,38 @@ async def search_marktplaats_via_apify(
                 if make_lower not in title_lower:
                     continue
 
-                # Smart model matching to avoid false positives (e.g., A3 vs Q3)
-                # Strategy:
-                # 1. Try exact model match (e.g., "a3 sportback" in title)
-                # 2. Try first token match as standalone word (e.g., "a3" but not just "3")
-                # 3. Extract model tokens and match them individually
+                # More lenient model matching to avoid filtering out valid matches
+                # For BMW 330, accept: 330, 330i, 330d, 330e, 330xi, 330xd, etc.
+                # Strategy: Match base model number, allow engine/drivetrain suffixes
 
                 matched = False
 
-                # Exact match of full model (best)
-                if model_lower in title_lower:
-                    matched = True
+                # Extract just the numeric part of the model (e.g., "330" from "330 Sedan")
+                model_numeric = re.search(r'\d+', model_lower)
+
+                if model_numeric:
+                    base_number = model_numeric.group()
+
+                    # Check if base number appears in title with word boundary
+                    # This matches "330", "330i", "330d", "330xi" but not "3300" or "1330"
+                    pattern = r'\b' + re.escape(base_number) + r'[a-z]{0,3}\b'
+                    if re.search(pattern, title_lower):
+                        matched = True
+                    elif len(base_number) == 3:
+                        # Fallback: match series designation (e.g., "440" -> "4 serie")
+                        # BMW uses 3-digit numbers where first digit = series: 320->3, 440->4, 520->5
+                        series_digit = base_number[0]
+                        series_pattern = r'\b' + re.escape(series_digit) + r'[\s-]?(?:serie[s]?|reeks)\b'
+                        if re.search(series_pattern, title_lower):
+                            matched = True
                 else:
-                    # Extract first meaningful token from model
-                    # E.g., "A3 Sportback" → "a3", "320d xDrive" → "320d"
+                    # No numeric model (e.g., "A3" or "Golf"), use exact/prefix matching
                     model_tokens = model_lower.split()
                     if model_tokens:
                         first_token = model_tokens[0]
-
-                        # Split title into words for token matching
-                        title_words = title_lower.split()
-
-                        # Check if first token appears as a complete word in title
-                        # This prevents "a3" from matching "qa3" or "3"
-                        if first_token in title_words:
+                        pattern = r'\b' + re.escape(first_token) + r'\b'
+                        if re.search(pattern, title_lower):
                             matched = True
-                        else:
-                            # Fallback: check with word boundaries using regex
-                            # This handles cases like "Audi A3, 2010" where comma is attached
-                            import re
-                            pattern = r'\b' + re.escape(first_token) + r'\b'
-                            if re.search(pattern, title_lower):
-                                matched = True
 
                 if matched:
                     filtered.append(comp)
@@ -513,6 +550,31 @@ def parse_marktplaats_results(results: list) -> list[DutchComparable]:
     return comparables
 
 
+def _model_to_series(make: str, model: str) -> str:
+    """
+    Convert specific model variants to series names for platforms like AutoTrack/Gaspedaal.
+
+    BMW 440 -> 4-serie, BMW 320 -> 3-serie, Mercedes C200 -> C-klasse, etc.
+    Returns the original model if no series mapping applies.
+    """
+    make_lower = make.lower()
+    model_lower = model.lower().strip()
+
+    if make_lower == "bmw":
+        # BMW 3-digit numeric models: 118->1-serie, 320->3-serie, 440->4-serie, etc.
+        m = re.match(r'^(\d)\d{2}', model_lower)
+        if m:
+            return f"{m.group(1)}-serie"
+
+    if make_lower in ("mercedes-benz", "mercedes"):
+        # Mercedes letter+number models: C200->C-klasse, E220->E-klasse, etc.
+        m = re.match(r'^([a-z])\s?\d', model_lower)
+        if m:
+            return f"{m.group(1).upper()}-klasse"
+
+    return model
+
+
 # =============================================================================
 # AUTOTRACK.NL SCRAPER
 # =============================================================================
@@ -535,9 +597,10 @@ def build_autotrack_search_url(vehicle: VehicleData) -> str:
     # Normalize make for URL
     make = vehicle.make.lower().replace(" ", "-")
 
-    # Extract just base model name for URL path
+    # Extract base model and convert to series name for URL path
     base_model_name = extract_base_model_name(vehicle.model)
-    model_path = base_model_name.lower().replace(" ", "-")
+    series_name = _model_to_series(vehicle.make, base_model_name)
+    model_path = series_name.lower().replace(" ", "-")
 
     # Build path: /aanbod/merk/{make}/model/{model}
     path = f"/merk/{make}/model/{model_path}"
@@ -661,45 +724,34 @@ async def search_autotrack_nl(vehicle: VehicleData) -> list[DutchComparable]:
     """
     search_url = build_autotrack_search_url(vehicle)
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                search_url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "text/html,application/xhtml+xml",
-                    "Accept-Language": "nl-NL,nl;q=0.9",
-                },
-                follow_redirects=True,
-                timeout=30,
-            )
-            response.raise_for_status()
+    try:
+        html = await _curl_cffi_get(search_url, referer="https://www.autotrack.nl/")
 
-            # Parse all results
-            all_results = parse_autotrack_search_results(response.text)
+        # Parse all results
+        all_results = parse_autotrack_search_results(html)
 
-            # Filter client-side (AutoTrack doesn't support URL filters)
-            filtered = []
-            min_km = int(vehicle.mileage_km * 0.8)
-            max_km = int(vehicle.mileage_km * 1.2)
+        # Filter client-side (AutoTrack doesn't support URL filters)
+        filtered = []
+        min_km = int(vehicle.mileage_km * 0.8)
+        max_km = int(vehicle.mileage_km * 1.2)
 
-            for comp in all_results:
-                # Year filter: ±1 year
-                if comp.year and abs(comp.year - vehicle.year) > 1:
-                    continue
+        for comp in all_results:
+            # Year filter: ±1 year
+            if comp.year and abs(comp.year - vehicle.year) > 1:
+                continue
 
-                # Mileage filter: ±20%
-                if comp.mileage_km and (comp.mileage_km < min_km or comp.mileage_km > max_km):
-                    continue
+            # Mileage filter: ±20%
+            if comp.mileage_km and (comp.mileage_km < min_km or comp.mileage_km > max_km):
+                continue
 
-                filtered.append(comp)
+            filtered.append(comp)
 
-            print(f"[AUTOTRACK] Filtered to {len(filtered)} results (from {len(all_results)} total) matching year={vehicle.year}±1, km={vehicle.mileage_km}±20%")
-            return filtered
+        print(f"[AUTOTRACK] Filtered to {len(filtered)} results (from {len(all_results)} total) matching year={vehicle.year}±1, km={vehicle.mileage_km}±20%")
+        return filtered
 
-        except Exception as e:
-            print(f"[AUTOTRACK] Error searching: {e}")
-            return []
+    except Exception as e:
+        print(f"[AUTOTRACK] Error searching: {e}")
+        return []
 
 
 # =============================================================================
@@ -722,11 +774,11 @@ def build_gaspedaal_search_url(vehicle: VehicleData) -> str:
     Returns:
         Search URL string
     """
-    # Normalize make and model for URL
+    # Normalize make and convert model to series name for URL
     make = vehicle.make.lower().replace(" ", "-")
-    full_model, variant = extract_model_variant(vehicle.model)
-    base_model = extract_base_model_name(full_model)
-    model = base_model.lower().replace(" ", "-")
+    base_model = extract_base_model_name(vehicle.model)
+    series_name = _model_to_series(vehicle.make, base_model)
+    model = series_name.lower().replace(" ", "-")
 
     # Build URL: /make/model
     url = f"https://www.gaspedaal.nl/{make}/{model}"
@@ -864,64 +916,68 @@ async def search_gaspedaal_nl(vehicle: VehicleData) -> list[DutchComparable]:
     """
     search_url = build_gaspedaal_search_url(vehicle)
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                search_url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "text/html,application/xhtml+xml",
-                    "Accept-Language": "nl-NL,nl;q=0.9",
-                },
-                follow_redirects=True,
-                timeout=30,
-            )
-            response.raise_for_status()
+    try:
+        html = await _curl_cffi_get(search_url, referer="https://www.gaspedaal.nl/")
 
-            # Parse all results
-            all_results = parse_gaspedaal_search_results(response.text)
+        # Parse all results
+        all_results = parse_gaspedaal_search_results(html)
 
-            # Apply client-side filtering for better relevance
-            filtered = []
-            min_km = int(vehicle.mileage_km * 0.8)
-            max_km = int(vehicle.mileage_km * 1.2)
+        # Apply client-side filtering for better relevance
+        filtered = []
+        min_km = int(vehicle.mileage_km * 0.8)
+        max_km = int(vehicle.mileage_km * 1.2)
 
-            # Extract base model for matching
-            base_model, _ = extract_model_variant(vehicle.model)
-            make_lower = vehicle.make.lower()
-            model_lower = base_model.lower()
+        # Extract base model for matching (without body styles)
+        base_model = extract_base_model_name(vehicle.model)
+        make_lower = vehicle.make.lower()
+        model_lower = base_model.lower()
 
-            for comp in all_results:
-                # Brand/model filter
-                title_lower = comp.title.lower()
-                if make_lower not in title_lower:
-                    continue
+        for comp in all_results:
+            # Brand/model filter
+            title_lower = comp.title.lower()
+            if make_lower not in title_lower:
+                continue
 
-                # Check if model matches (word boundary)
+            # Check if model matches
+            model_matched = False
+            model_numeric = re.search(r'\d+', model_lower)
+            if model_numeric:
+                base_number = model_numeric.group()
+                pattern = r'\b' + re.escape(base_number) + r'[a-z]{0,3}\b'
+                if re.search(pattern, title_lower):
+                    model_matched = True
+                elif len(base_number) == 3:
+                    # Fallback: match series designation (e.g., "440" -> "4 serie")
+                    series_digit = base_number[0]
+                    series_pattern = r'\b' + re.escape(series_digit) + r'[\s-]?(?:serie[s]?|reeks)\b'
+                    if re.search(series_pattern, title_lower):
+                        model_matched = True
+            else:
                 model_tokens = model_lower.split()
                 if model_tokens:
                     first_token = model_tokens[0]
-                    import re
                     pattern = r'\b' + re.escape(first_token) + r'\b'
-                    if not re.search(pattern, title_lower):
-                        continue
+                    if re.search(pattern, title_lower):
+                        model_matched = True
+            if not model_matched:
+                continue
 
-                # Year filter: ±1 year
-                if comp.year and abs(comp.year - vehicle.year) > 1:
-                    continue
+            # Year filter: ±1 year
+            if comp.year and abs(comp.year - vehicle.year) > 1:
+                continue
 
-                # Mileage filter: ±20%
-                if comp.mileage_km and (comp.mileage_km < min_km or comp.mileage_km > max_km):
-                    continue
+            # Mileage filter: ±20%
+            if comp.mileage_km and (comp.mileage_km < min_km or comp.mileage_km > max_km):
+                continue
 
-                filtered.append(comp)
+            filtered.append(comp)
 
-            print(f"[GASPEDAAL] Filtered to {len(filtered)} results (from {len(all_results)} total) matching {vehicle.make} {base_model}, year={vehicle.year}±1, km={vehicle.mileage_km}±20%")
-            return filtered
+        print(f"[GASPEDAAL] Filtered to {len(filtered)} results (from {len(all_results)} total) matching {vehicle.make} {base_model}, year={vehicle.year}±1, km={vehicle.mileage_km}±20%")
+        return filtered
 
-        except Exception as e:
-            print(f"[GASPEDAAL] Error searching: {e}")
-            return []
+    except Exception as e:
+        print(f"[GASPEDAAL] Error searching: {e}")
+        return []
 
 
 # =============================================================================
@@ -943,12 +999,12 @@ def build_occasions_search_url(vehicle: VehicleData) -> str:
     # WordPress search uses /?s=query format
     base_url = "https://www.occasions.nl"
 
-    # Get full model name for search
-    full_model, variant = extract_model_variant(vehicle.model)
+    # Get base model name for search (without body styles like "Sedan")
+    base_model = extract_base_model_name(vehicle.model)
 
     # Build search query: "Make Model Year" for better WordPress search results
     # WordPress doesn't support advanced filters via URL, so we use general search
-    search_query = f"{vehicle.make} {full_model} {vehicle.year}"
+    search_query = f"{vehicle.make} {base_model} {vehicle.year}"
 
     # WordPress search parameter
     params = [f"s={search_query.replace(' ', '+')}"]
@@ -1125,11 +1181,7 @@ async def search_occasions_nl(vehicle: VehicleData) -> list[DutchComparable]:
         try:
             response = await client.get(
                 search_url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "text/html,application/xhtml+xml",
-                    "Accept-Language": "nl-NL,nl;q=0.9",
-                },
+                headers=_get_dutch_headers(referer="https://www.occasions.nl/"),
                 follow_redirects=True,
                 timeout=30,
             )
@@ -1144,7 +1196,9 @@ async def search_occasions_nl(vehicle: VehicleData) -> list[DutchComparable]:
 
 async def search_autoscout24_nl(vehicle: VehicleData) -> list[DutchComparable]:
     """
-    Search AutoScout24 NL for comparable vehicles.
+    Search AutoScout24 NL for comparable vehicles with progressive parameter widening.
+
+    Strategy: Start strict, progressively widen parameters until results found.
 
     Args:
         vehicle: The target vehicle to find comparables for
@@ -1152,27 +1206,57 @@ async def search_autoscout24_nl(vehicle: VehicleData) -> list[DutchComparable]:
     Returns:
         List of comparable vehicles from AutoScout24 NL
     """
-    search_url = build_autoscout24_search_url(vehicle)
-
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                search_url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "text/html,application/xhtml+xml",
-                    "Accept-Language": "nl-NL,nl;q=0.9",
-                },
-                follow_redirects=True,
-                timeout=30,
+        # Try progressively wider search parameters
+        search_attempts = [
+            # Attempt 1: Strict (±1 year, ±20% km, fuel + transmission)
+            {"year_delta": 1, "km_percent": 0.2, "include_fuel": True, "include_transmission": True},
+            # Attempt 2: Remove transmission filter
+            {"year_delta": 1, "km_percent": 0.2, "include_fuel": True, "include_transmission": False},
+            # Attempt 3: Widen mileage ±30%
+            {"year_delta": 1, "km_percent": 0.3, "include_fuel": True, "include_transmission": False},
+            # Attempt 4: Widen year ±2
+            {"year_delta": 2, "km_percent": 0.3, "include_fuel": True, "include_transmission": False},
+            # Attempt 5: Remove fuel filter
+            {"year_delta": 2, "km_percent": 0.3, "include_fuel": False, "include_transmission": False},
+            # Attempt 6: Widen mileage ±50%
+            {"year_delta": 2, "km_percent": 0.5, "include_fuel": False, "include_transmission": False},
+        ]
+
+        for i, params in enumerate(search_attempts, 1):
+            search_url = build_autoscout24_search_url(
+                vehicle,
+                year_delta=params["year_delta"],
+                km_percent=params["km_percent"],
+                include_fuel=params["include_fuel"],
+                include_transmission=params["include_transmission"]
             )
-            response.raise_for_status()
 
-            return parse_autoscout24_search_results(response.text)
+            print(f"[AUTOSCOUT24 NL] Attempt {i}/{len(search_attempts)}: year±{params['year_delta']}, km±{int(params['km_percent']*100)}%, fuel={params['include_fuel']}, trans={params['include_transmission']}")
 
-        except Exception as e:
-            print(f"Error searching AutoScout24 NL: {e}")
-            return []
+            try:
+                response = await client.get(
+                    search_url,
+                    headers=_get_dutch_headers(referer="https://www.autoscout24.nl/"),
+                    follow_redirects=True,
+                    timeout=30,
+                )
+                response.raise_for_status()
+
+                results = parse_autoscout24_search_results(response.text)
+
+                if results:
+                    print(f"[AUTOSCOUT24 NL] SUCCESS: Found {len(results)} results on attempt {i}")
+                    return results
+                else:
+                    print(f"[AUTOSCOUT24 NL] Attempt {i} returned 0 results, trying wider parameters...")
+
+            except Exception as e:
+                print(f"[AUTOSCOUT24 NL] Error on attempt {i}: {e}")
+                continue
+
+        print(f"[AUTOSCOUT24 NL] All {len(search_attempts)} attempts failed, returning empty list")
+        return []
 
 
 async def search_dutch_market(
