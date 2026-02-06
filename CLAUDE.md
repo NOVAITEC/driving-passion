@@ -72,12 +72,7 @@ Push naar main branch, Vercel deployed automatisch.
   - Ondersteunt .de, .nl, .be, .com en alle andere AutoScout24 domeinen
   - Automatische detectie van domain-specifieke structuren (direct scraping vs Apify format)
   - Multilingual support (Duits, Nederlands, etc.) via genormaliseerde parsing
-- **Mobile.de**: Apify fallback beschikbaar maar actor discontinued - **WERKT NIET**
-- **Alternative voor mobile.de**: Selenium scraper beschikbaar in `selenium_scrapers.py` (niet geactiveerd)
-  - Gebruikt undetected-chromedriver om Akamai Bot Manager te omzeilen
-  - Vereist Xvfb virtual display voor Modal deployment
-  - Lokaal getest en werkend
-  - Activatie vereist: Xvfb setup + integratie in app.py
+- **Mobile.de**: Apify actor discontinued - **WERKT NIET**
 - **Cost Savings**: ~€120-180/year (AutoScout24 direct scraping)
 - **Configuration**: `USE_DIRECT_SCRAPING = True` in [constants.py](modal-app/constants.py:72)
 - **Performance**: Direct scraping ~10-15s vs Apify ~30s
@@ -98,7 +93,7 @@ Alle 5 bronnen worden parallel doorzocht. Resultaten worden gededupliceerd op ba
 - **autoscout24.de:** `3x1t~autoscout24-scraper-ppr` (Pay-per-result, fallback only)
 
 **Status:**
-- **Mobile.de**: Apify actor discontinued, niet werkend. Selenium alternative beschikbaar in `selenium_scrapers.py`
+- **Mobile.de**: Apify actor discontinued, niet werkend
 - **AutoScout24.de**: Direct HTTP scraping werkt (primary). Apify als fallback.
 
 **Fallback Strategy (AutoScout24 only):**
@@ -166,14 +161,6 @@ De BPM-calculator implementeert het **keuzerecht** (Artikel 110 VWEU): bij impor
 ### Mobile.de scraping faalt
 - **Status**: Apify actor `3x1t~mobile-de-scraper` is DISCONTINUED
 - **Huidige situatie**: Mobile.de scraping werkt NIET
-- **Oplossing beschikbaar**: Selenium scraper in `selenium_scrapers.py`
-  - Gebruikt undetected-chromedriver om Akamai Bot Manager te omzeilen
-  - Lokaal getest en werkend
-  - **Vereist voor Modal deployment:**
-    1. Xvfb virtual display in Modal image
-    2. Chrome/Chromium + ChromeDriver dependencies
-    3. Integratie in `app.py`
-  - **Setup instructies**: Zie "Mobile.de Selenium Scraper Activeren" sectie hieronder
 
 ### Marktplaats resultaten ontbreken
 - Controleer of de actor `ivanvs~marktplaats-scraper` is toegevoegd aan je Apify account
@@ -240,68 +227,6 @@ Scraping Strategy Details:
 │                                                   │
 │  Mobile.de: ❌ NOT WORKING                       │
 │  - Apify actor discontinued                      │
-│  - Selenium alternative available (not active)   │
 └──────────────────────────────────────────────────┘
 ```
 
-## Mobile.de Selenium Scraper Activeren (Optioneel)
-
-De Selenium scraper in `selenium_scrapers.py` is klaar maar niet geïntegreerd. Om te activeren:
-
-### 1. Modal Image Dependencies
-Update `app.py` image configuratie:
-```python
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install([
-        "chromium",
-        "chromium-driver",
-        "xvfb",  # Virtual display
-        "fonts-liberation",
-        "libnss3",
-        "libatk-bridge2.0-0",
-    ])
-    .pip_install([
-        "undetected-chromedriver",
-        "selenium",
-        "xvfbwrapper",  # Python wrapper voor Xvfb
-    ])
-)
-```
-
-### 2. Integratie in app.py
-```python
-from selenium_scrapers import scrape_mobile_de_selenium
-
-# In scrape_vehicle() functie:
-if "mobile.de" in url:
-    result = scrape_mobile_de_selenium(url)
-    return result
-```
-
-### 3. Xvfb Setup in selenium_scrapers.py
-```python
-from xvfbwrapper import Xvfb
-
-def scrape_mobile_de_selenium(url: str) -> ScrapeResult:
-    vdisplay = Xvfb(width=1920, height=1080)
-    vdisplay.start()
-
-    try:
-        # Normal scraping code...
-    finally:
-        vdisplay.stop()
-```
-
-### 4. Test & Deploy
-```bash
-# Test lokaal (vereist Xvfb):
-pip install xvfbwrapper
-python3 modal-app/test_selenium_scraper.py
-
-# Deploy naar Modal:
-cd modal-app
-python3 -m modal deploy app.py
-```
-
-**Verwachte kosten**: €0 (geen Apify), wel hogere Modal compute kosten door browser overhead

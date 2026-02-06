@@ -30,14 +30,5 @@ build/
 *.log
 npm-debug.log*
 
-# Modal app test files
-modal-app/test_*.py
-modal-app/*_response.json
-
-# Experimental scrapers (not in production)
-modal-app/crawlee_scrapers.py
-modal-app/playwright_scrapers.py
-modal-app/selenium_scrapers.py
-
 # Sales data (private)
 sales/
