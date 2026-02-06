@@ -730,23 +730,19 @@ async def search_autotrack_nl(vehicle: VehicleData) -> list[DutchComparable]:
         # Parse all results
         all_results = parse_autotrack_search_results(html)
 
-        # Filter client-side (AutoTrack doesn't support URL filters)
+        # Wide filter: ±5 years, ±50% km (progressive search narrows further)
         filtered = []
-        min_km = int(vehicle.mileage_km * 0.8)
-        max_km = int(vehicle.mileage_km * 1.2)
+        min_km = int(vehicle.mileage_km * 0.5)
+        max_km = int(vehicle.mileage_km * 1.5)
 
         for comp in all_results:
-            # Year filter: ±1 year
-            if comp.year and abs(comp.year - vehicle.year) > 1:
+            if comp.year and abs(comp.year - vehicle.year) > 5:
                 continue
-
-            # Mileage filter: ±20%
             if comp.mileage_km and (comp.mileage_km < min_km or comp.mileage_km > max_km):
                 continue
-
             filtered.append(comp)
 
-        print(f"[AUTOTRACK] Filtered to {len(filtered)} results (from {len(all_results)} total) matching year={vehicle.year}±1, km={vehicle.mileage_km}±20%")
+        print(f"[AUTOTRACK] Filtered to {len(filtered)} results (from {len(all_results)} total) matching year={vehicle.year}±5, km={vehicle.mileage_km}±50%")
         return filtered
 
     except Exception as e:
@@ -922,10 +918,10 @@ async def search_gaspedaal_nl(vehicle: VehicleData) -> list[DutchComparable]:
         # Parse all results
         all_results = parse_gaspedaal_search_results(html)
 
-        # Apply client-side filtering for better relevance
+        # Wide filter: ±5 years, ±50% km (progressive search narrows further)
         filtered = []
-        min_km = int(vehicle.mileage_km * 0.8)
-        max_km = int(vehicle.mileage_km * 1.2)
+        min_km = int(vehicle.mileage_km * 0.5)
+        max_km = int(vehicle.mileage_km * 1.5)
 
         # Extract base model for matching (without body styles)
         base_model = extract_base_model_name(vehicle.model)
@@ -962,17 +958,17 @@ async def search_gaspedaal_nl(vehicle: VehicleData) -> list[DutchComparable]:
             if not model_matched:
                 continue
 
-            # Year filter: ±1 year
-            if comp.year and abs(comp.year - vehicle.year) > 1:
+            # Year filter: ±5 years (progressive search narrows further)
+            if comp.year and abs(comp.year - vehicle.year) > 5:
                 continue
 
-            # Mileage filter: ±20%
+            # Mileage filter: ±50% (progressive search narrows further)
             if comp.mileage_km and (comp.mileage_km < min_km or comp.mileage_km > max_km):
                 continue
 
             filtered.append(comp)
 
-        print(f"[GASPEDAAL] Filtered to {len(filtered)} results (from {len(all_results)} total) matching {vehicle.make} {base_model}, year={vehicle.year}±1, km={vehicle.mileage_km}±20%")
+        print(f"[GASPEDAAL] Filtered to {len(filtered)} results (from {len(all_results)} total) matching {vehicle.make} {base_model}, year={vehicle.year}±5, km={vehicle.mileage_km}±50%")
         return filtered
 
     except Exception as e:
@@ -1338,9 +1334,9 @@ async def search_dutch_market_progressive(
     """
     Progressively search Dutch market with expanding year ranges.
 
-    Starts with ±1 year, then ±2, ±3, etc. until enough comparables found.
-    This ensures we get enough data points for accurate valuation while
-    prioritizing closer years.
+    Strategy: Run AutoTrack/Gaspedaal/Occasions/Marktplaats only ONCE (they
+    don't support URL-based year/km filtering). Only re-run AutoScout24 NL
+    with progressively wider parameters since it supports URL-based filtering.
 
     Args:
         vehicle: Target vehicle to find comparables for
@@ -1351,64 +1347,110 @@ async def search_dutch_market_progressive(
     Returns:
         List of comparable vehicles from multiple year ranges
     """
-    all_comparables = []
-    year_delta = 1
-
     print(f"[PROGRESSIVE SEARCH] Target: {vehicle.make} {vehicle.model} ({vehicle.year})")
     print(f"[PROGRESSIVE SEARCH] Goal: Find at least {min_comparables} comparables")
 
-    while year_delta <= max_year_delta:
-        print(f"\n[PROGRESSIVE SEARCH] Searching year range: {vehicle.year}±{year_delta} ({vehicle.year - year_delta} - {vehicle.year + year_delta})")
+    # Step 1: Run non-AutoScout24 platforms once (they don't support URL filtering)
+    # Use wide year range for client-side filtering since we only call them once
+    other_tasks = [
+        search_autotrack_nl(vehicle),
+        search_gaspedaal_nl(vehicle),
+        search_occasions_nl(vehicle),
+    ]
+    other_names = ["AutoTrack", "Gaspedaal", "Occasions"]
 
-        # Create modified vehicle with expanded year range for URL building
-        search_vehicle = VehicleData(
-            make=vehicle.make,
-            model=vehicle.model,
-            year=vehicle.year,  # Keep original year for targeting
-            mileage_km=vehicle.mileage_km,
-            price_eur=vehicle.price_eur,
-            fuel_type=vehicle.fuel_type,
-            transmission=vehicle.transmission,
-            co2_gkm=vehicle.co2_gkm,
-            first_registration_date=vehicle.first_registration_date,
-            listing_url=vehicle.listing_url,
-            source=vehicle.source,
-            title=vehicle.title,
-            features=vehicle.features,
-            attributes=vehicle.attributes,
-        )
+    if apify_token:
+        other_tasks.append(search_marktplaats_via_apify(vehicle, apify_token))
+        other_names.append("Marktplaats")
 
-        # Search all platforms
-        round_comparables = await search_dutch_market(search_vehicle, apify_token)
+    print(f"[PROGRESSIVE SEARCH] Running {len(other_tasks)} non-AutoScout24 platforms...")
+    other_results = await asyncio.gather(*other_tasks, return_exceptions=True)
 
-        # Filter to this year range (client-side filtering)
-        min_year = vehicle.year - year_delta
-        max_year = vehicle.year + year_delta
+    # Collect all non-AutoScout24 results (unfiltered by year for progressive use)
+    cached_other_results = []
+    for i, result in enumerate(other_results):
+        if isinstance(result, list):
+            cached_other_results.extend(result)
+            print(f"[PROGRESSIVE SEARCH] {other_names[i]}: {len(result)} results")
+        else:
+            print(f"[PROGRESSIVE SEARCH] {other_names[i]} failed: {result}")
 
-        filtered_comparables = [
-            comp for comp in round_comparables
-            if comp.year and min_year <= comp.year <= max_year
-        ]
+    # Step 2: Progressive search with AutoScout24 NL + re-filtering cached results
+    all_comparables = []
+    year_delta = 1
 
-        print(f"[PROGRESSIVE SEARCH] Found {len(filtered_comparables)} in year range ±{year_delta}")
+    # AutoScout24 NL progressive widening attempts per year_delta
+    as24_widening = [
+        # (km_percent, include_fuel, include_transmission)
+        (0.2, True, True),
+        (0.2, True, False),
+        (0.3, True, False),
+        (0.5, False, False),
+    ]
 
-        # Add new comparables (avoid duplicates)
-        existing_urls = {c.listing_url for c in all_comparables}
-        new_comparables = [
-            comp for comp in filtered_comparables
-            if comp.listing_url not in existing_urls
-        ]
+    async with httpx.AsyncClient() as as24_client:
+        while year_delta <= max_year_delta:
+            print(f"\n[PROGRESSIVE SEARCH] Searching year range: {vehicle.year}±{year_delta} ({vehicle.year - year_delta} - {vehicle.year + year_delta})")
 
-        all_comparables.extend(new_comparables)
-        print(f"[PROGRESSIVE SEARCH] Total unique comparables: {len(all_comparables)}")
+            min_year = vehicle.year - year_delta
+            max_year = vehicle.year + year_delta
 
-        # Check if we have enough
-        if len(all_comparables) >= min_comparables:
-            print(f"[PROGRESSIVE SEARCH] ✓ Target reached! Found {len(all_comparables)} comparables")
-            break
+            # Run AutoScout24 NL with this year_delta and progressive param widening
+            autoscout_results = []
+            for km_pct, inc_fuel, inc_trans in as24_widening:
+                search_url = build_autoscout24_search_url(
+                    vehicle, year_delta=year_delta, km_percent=km_pct,
+                    include_fuel=inc_fuel, include_transmission=inc_trans,
+                )
+                try:
+                    resp = await as24_client.get(
+                        search_url,
+                        headers=_get_dutch_headers(referer="https://www.autoscout24.nl/"),
+                        follow_redirects=True, timeout=30,
+                    )
+                    resp.raise_for_status()
+                    autoscout_results = parse_autoscout24_search_results(resp.text)
+                    if autoscout_results:
+                        break
+                except Exception:
+                    continue
 
-        # Expand search range
-        year_delta += 1
+            print(f"[PROGRESSIVE SEARCH] AutoScout24 NL: {len(autoscout_results)} results (year±{year_delta})")
+
+            # Combine AutoScout24 results with cached other results filtered to this year range
+            round_comparables = list(autoscout_results)
+            for comp in cached_other_results:
+                if comp.year and min_year <= comp.year <= max_year:
+                    round_comparables.append(comp)
+
+            # Deduplicate
+            seen_urls = set()
+            unique_round = []
+            for comp in round_comparables:
+                url_norm = comp.listing_url.lower().split('?')[0].rstrip('/')
+                if url_norm and url_norm not in seen_urls:
+                    seen_urls.add(url_norm)
+                    unique_round.append(comp)
+
+            print(f"[PROGRESSIVE SEARCH] Found {len(unique_round)} unique in year range ±{year_delta}")
+
+            # Add new comparables (avoid duplicates with previous rounds)
+            existing_urls = {c.listing_url.lower().split('?')[0].rstrip('/') for c in all_comparables}
+            new_comparables = [
+                comp for comp in unique_round
+                if comp.listing_url.lower().split('?')[0].rstrip('/') not in existing_urls
+            ]
+
+            all_comparables.extend(new_comparables)
+            print(f"[PROGRESSIVE SEARCH] Total unique comparables: {len(all_comparables)}")
+
+            # Check if we have enough
+            if len(all_comparables) >= min_comparables:
+                print(f"[PROGRESSIVE SEARCH] ✓ Target reached! Found {len(all_comparables)} comparables")
+                break
+
+            # Expand search range
+            year_delta += 1
 
     if len(all_comparables) < min_comparables:
         print(f"[PROGRESSIVE SEARCH] ⚠ Only found {len(all_comparables)}/{min_comparables} comparables after searching ±{max_year_delta} years")
