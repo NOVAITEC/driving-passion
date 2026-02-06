@@ -949,20 +949,20 @@ def _parse_autoscout24_direct(item: dict, url: str) -> VehicleData:
     if not price:
         price = prices.get("dealer", {}).get("priceRaw", 0) or 0
 
-    # Mileage - handle numeric (int/float), dict, and string formats
-    # IMPORTANT: float like 12499.0 → str gives "12499.0" → digit filter gives "124990" (WRONG!)
-    mileage_raw = vehicle.get("mileageInKm", 0)
-    if isinstance(mileage_raw, dict):
-        mileage_raw = mileage_raw.get("raw", 0)
-    if isinstance(mileage_raw, (int, float)):
-        mileage = int(mileage_raw)
+    # Mileage - prefer mileageInKmRaw (clean integer) over mileageInKm (formatted string like "57.002 km")
+    mileage = 0
+    mileage_raw_int = vehicle.get("mileageInKmRaw")
+    if isinstance(mileage_raw_int, (int, float)):
+        mileage = int(mileage_raw_int)
     else:
-        mileage_str = str(mileage_raw)
-        # Try float conversion first (handles "12499.0" correctly)
-        try:
-            mileage = int(float(mileage_str))
-        except (ValueError, TypeError):
-            mileage = int("".join(filter(str.isdigit, mileage_str)) or 0)
+        mileage_raw = vehicle.get("mileageInKm", 0)
+        if isinstance(mileage_raw, dict):
+            mileage_raw = mileage_raw.get("raw", 0)
+        if isinstance(mileage_raw, (int, float)):
+            mileage = int(mileage_raw)
+        else:
+            # String like "57.002 km" - strip non-digits (dots are thousands separators)
+            mileage = int("".join(filter(str.isdigit, str(mileage_raw))) or 0)
 
     # First Registration - parse "11/2010" format
     first_reg_str = str(vehicle.get("firstRegistrationDate", ""))
