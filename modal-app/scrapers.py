@@ -316,6 +316,9 @@ async def scrape_autoscout24_de_direct(url: str) -> ScrapeResult:
 
             if not listing_data:
                 print(f"[AUTOSCOUT24.DE DIRECT] Available keys: {list(json_data.keys())}")
+                if "props" in json_data:
+                    pp = json_data["props"].get("pageProps", {})
+                    print(f"[AUTOSCOUT24.DE DIRECT] pageProps keys: {list(pp.keys())[:20]}")
                 return ScrapeResult(
                     success=False,
                     error_type="PARSE_ERROR",
